@@ -1,5 +1,7 @@
 # editmatker — AI Edit Studio
 
+**[앱 실행하기 (Manus Preview)](https://8328-ixzuggzo9wj9jiinpx2qm-f144e382.sg2.manus.computer)**
+
 인물과 분위기를 입력해 최신 공개 영상 후보를 찾고, 사용 권한을 확인한 업로드 영상으로 AI 편집 타임라인과 세로형 MP4 초안을 만드는 한국어 편집 작업대입니다.
 
 ## 시작하기
