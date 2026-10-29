@@ -35,4 +35,23 @@ describe("Vercel 프록시", () => {
     expect(String(fetchMock.mock.calls[0][0])).toContain("https://www.reddit.com/search.json?q=cats");
     expect((await reddit(new Request("https://app.test/api/reddit?q="))).status).toBe(400);
   });
+
+  it("Reddit이 막으면 PullPush 결과를 Reddit 모양으로 바꿔 돌려준다", async () => {
+    const fetchMock = vi.fn(async (url: string) =>
+      String(url).includes("reddit.com") ? new Response("blocked", { status: 403 }) : Response.json({ data: [{ id: "x1", title: "Cat", is_video: true }] })
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    const response = await reddit(new Request("https://app.test/api/reddit?q=cats"));
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-editmatker-source")).toBe("pullpush");
+    expect(await response.json()).toEqual({ data: { children: [{ data: { id: "x1", title: "Cat", is_video: true } }] } });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("https://api.pullpush.io/reddit/search/submission/?q=cats");
+  });
+
+  it("둘 다 실패하면 이유를 함께 알려 준다", async () => {
+    vi.stubGlobal("fetch", vi.fn(async () => new Response("no", { status: 403 })));
+    const response = await reddit(new Request("https://app.test/api/reddit?q=cats"));
+    expect(response.status).toBe(502);
+    expect((await response.json()).error).toBe("Reddit 응답 오류 403, PullPush 응답 오류 (403)");
+  });
 });

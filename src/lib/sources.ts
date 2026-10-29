@@ -28,6 +28,18 @@ export interface SourceVideo {
   relevance: number;
 }
 
+/** 출처별 검색 결과 요약. 영상을 하나도 못 찾았을 때 이유를 보여 주는 데 씁니다. */
+export interface SearchReport {
+  provider: Provider;
+  /** 쓸 수 있는 후보 수 */
+  usable: number;
+  /** 검색에 걸린 영상 수 (걸렀거나 재생할 수 없는 것 포함) */
+  scanned: number;
+  error?: string;
+}
+
+export type SearchStats = { scanned: number };
+
 export interface TopicInfo {
   query: string;
   label: string;
@@ -231,10 +243,14 @@ export function buildCommonsQueries(topic: TopicInfo, hints: string[]): string[]
   return [...new Set(queries)];
 }
 
-export async function searchCommons(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
+export async function searchCommons(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const found = new Map<string, SourceVideo>();
+  const seen = new Set<string>();
+  const errors: unknown[] = [];
   const add = (pages: any[], base: number) => {
     for (const page of pages) {
+      const info = page?.videoinfo?.[0] ?? page?.imageinfo?.[0];
+      if (info?.mediatype === "VIDEO") seen.add(String(page.pageid ?? page.title));
       const rank = Number(page?.index) || 1;
       const source = parseCommonsPage(page, base - rank * 0.01, mode);
       if (source && !found.has(source.id)) found.set(source.id, source);
@@ -247,9 +263,16 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
   }
   const queries = buildCommonsQueries(topic, hints);
   const results = await Promise.all(
-    queries.map(q => commonsQuery({ generator: "search", gsrsearch: q, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(() => []))
+    queries.map(q =>
+      commonsQuery({ generator: "search", gsrsearch: q, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(error => {
+        errors.push(error);
+        return [];
+      })
+    )
   );
   results.forEach((pages, i) => add(pages, 2 - i * 0.2));
+  if (stats) stats.scanned += seen.size;
+  if (errors.length === queries.length && queries.length) throw errors[0];
   return [...found.values()];
 }
 
@@ -281,7 +304,7 @@ export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: Licen
   return `${base} AND licenseurl:(*creativecommons.org/licenses/by/* OR *creativecommons.org/licenses/by-sa/* OR *publicdomain*)`;
 }
 
-export async function searchArchive(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
+export async function searchArchive(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const limit = mode === "any" ? 10 : 6;
   const q = buildArchiveQuery(topic, hints, mode);
   const url = new URL("https://archive.org/advancedsearch.php");
@@ -289,6 +312,7 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
   for (const field of ["identifier", "title", "creator", "licenseurl"]) url.searchParams.append("fl[]", field);
   const data = await getJson(url.toString(), signal);
   const docs: any[] = data?.response?.docs ?? [];
+  if (stats) stats.scanned += docs.length;
   const sources = await Promise.all(
     docs.map(async (doc, index): Promise<SourceVideo | null> => {
       const license = resolveLicense("", typeof doc.licenseurl === "string" ? doc.licenseurl : null, mode);
@@ -322,22 +346,54 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
  * 모든 출처를 함께 검색하고 관련도 순으로 정렬합니다.
  * YouTube는 로컬 도우미(`helper`)가 있을 때만, YouTube·Reddit은 "모든 공개 영상" 모드에서만 씁니다.
  */
-export async function findSources(topic: TopicInfo, hints: string[], mode: LicenseMode, helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
-  const settle = (promise: Promise<SourceVideo[]>) =>
-    promise.catch(error => {
+export async function findSources(
+  topic: TopicInfo,
+  hints: string[],
+  mode: LicenseMode,
+  helper: string | null,
+  signal?: AbortSignal
+): Promise<{ sources: SourceVideo[]; reports: SearchReport[] }> {
+  const reports: SearchReport[] = [];
+  const run = async (provider: Provider, search: (stats: SearchStats) => Promise<SourceVideo[]>) => {
+    const stats: SearchStats = { scanned: 0 };
+    try {
+      const sources = await search(stats);
+      reports.push({ provider, usable: sources.length, scanned: Math.max(stats.scanned, sources.length) });
+      return sources;
+    } catch (error) {
       if (signal?.aborted) throw error;
-      return [] as SourceVideo[];
-    });
+      reports.push({ provider, usable: 0, scanned: stats.scanned, error: describeError(error) });
+      return [];
+    }
+  };
   const social = mode === "any";
   const results = await Promise.all([
-    social && helper ? settle(searchYouTube(topic, hints, helper, signal)) : Promise.resolve([]),
-    social ? settle(searchReddit(topic, hints, helper, signal)) : Promise.resolve([]),
-    settle(searchCommons(topic, hints, mode, signal)),
-    settle(searchArchive(topic, hints, mode, signal)),
+    social && helper ? run("YouTube", () => searchYouTube(topic, hints, helper, signal)) : Promise.resolve([]),
+    social ? run("Reddit", stats => searchReddit(topic, hints, helper, signal, stats)) : Promise.resolve([]),
+    run("Wikimedia Commons", stats => searchCommons(topic, hints, mode, signal, stats)),
+    run("Internet Archive", stats => searchArchive(topic, hints, mode, signal, stats)),
   ]);
   const unique = new Map<string, SourceVideo>();
   for (const source of results.flat()) if (!unique.has(source.id)) unique.set(source.id, source);
-  return rankSources([...unique.values()], topic);
+  return { sources: rankSources([...unique.values()], topic), reports };
+}
+
+/** 브라우저의 네트워크 오류를 알아들을 수 있는 말로 바꿉니다. */
+export function describeError(error: unknown): string {
+  if (error instanceof TypeError) return "접속이 막혔어요(네트워크·CORS)";
+  return error instanceof Error ? error.message : String(error);
+}
+
+/** 출처별 결과를 한 줄씩 사람이 읽을 수 있게 정리합니다. */
+export function summarizeReports(reports: SearchReport[]): string {
+  return reports
+    .map(r => {
+      if (r.error) return `${r.provider}: 실패 — ${r.error}`;
+      if (r.usable) return `${r.provider}: ${r.usable}개`;
+      if (r.scanned) return `${r.provider}: ${r.scanned}개 찾았지만 쓸 수 있는 영상 없음(길이·형식·라이선스 조건)`;
+      return `${r.provider}: 검색 결과 없음`;
+    })
+    .join("\n");
 }
 
 export function rankSources(sources: SourceVideo[], topic: TopicInfo): SourceVideo[] {

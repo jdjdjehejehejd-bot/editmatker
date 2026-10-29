@@ -120,3 +120,25 @@ describe("검색 보조", () => {
     expect(ranked[0].id).toBe("b");
   });
 });
+
+describe("검색 결과 요약", () => {
+  it("출처별로 실패·결과 없음·걸러짐을 구분해 보여 준다", async () => {
+    const { summarizeReports, describeError } = await import("./sources");
+    expect(describeError(new TypeError("Failed to fetch"))).toBe("접속이 막혔어요(네트워크·CORS)");
+    expect(
+      summarizeReports([
+        { provider: "Reddit", usable: 0, scanned: 0, error: "응답 오류 403" },
+        { provider: "Wikimedia Commons", usable: 0, scanned: 7 },
+        { provider: "Internet Archive", usable: 0, scanned: 0 },
+        { provider: "YouTube", usable: 3, scanned: 3 },
+      ])
+    ).toBe(
+      [
+        "Reddit: 실패 — 응답 오류 403",
+        "Wikimedia Commons: 7개 찾았지만 쓸 수 있는 영상 없음(길이·형식·라이선스 조건)",
+        "Internet Archive: 검색 결과 없음",
+        "YouTube: 3개",
+      ].join("\n")
+    );
+  });
+});

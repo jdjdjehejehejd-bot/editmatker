@@ -1,7 +1,7 @@
 // YouTube·Reddit 검색. YouTube 영상은 로컬 도우미(helper/server.mjs)를 거쳐야 받을 수 있고,
 // Reddit은 도우미가 없으면 브라우저에서 직접 검색해 소리 없는 영상 파일을 씁니다.
 
-import type { SourceVideo, TopicInfo } from "./sources";
+import { describeError, type SearchStats, type SourceVideo, type TopicInfo } from "./sources";
 
 export const DEFAULT_HELPER = "http://localhost:8787";
 const MIN_DURATION = 3;
@@ -192,7 +192,7 @@ export function proxyBase() {
 
 async function fetchJson(url: string, signal?: AbortSignal) {
   const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error(`Reddit 검색 실패 (${response.status})`);
+  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `응답 오류 ${response.status}`);
   return response.json();
 }
 
@@ -200,19 +200,32 @@ async function fetchJson(url: string, signal?: AbortSignal) {
  * 도우미가 있으면 도우미로, 없으면 휴대폰 브라우저에서 Reddit을 직접 부르고(사용자 IP라 잘 막히지 않음),
  * 그것도 막히면 Vercel 함수 프록시를 거칩니다.
  */
-export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
-  return searchAll(socialQueries(topic, hints), q => searchRedditOnce(q, helper, signal), signal);
+export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
+  return searchAll(socialQueries(topic, hints), q => searchRedditOnce(q, helper, signal, stats), signal);
 }
 
-async function searchRedditOnce(q: string, helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
-  if (helper) return parseRedditSearch(await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=25`, signal), helper);
-  const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "25", raw_json: "1" });
+function countPosts(data: any) {
+  return Array.isArray(data?.data?.children) ? data.data.children.length : 0;
+}
+
+async function searchRedditOnce(q: string, helper: string | null, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   let data: unknown;
-  try {
-    data = await fetchJson(`https://www.reddit.com/search.json?${params}`, signal);
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    data = await fetchJson(`${proxyBase()}/api/reddit?q=${encodeURIComponent(q)}&limit=25`, signal);
+  if (helper) {
+    data = await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=50`, signal);
+  } else {
+    const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "50", raw_json: "1" });
+    try {
+      data = await fetchJson(`https://www.reddit.com/search.json?${params}`, signal);
+    } catch (direct) {
+      if (signal?.aborted) throw direct;
+      try {
+        data = await fetchJson(`${proxyBase()}/api/reddit?q=${encodeURIComponent(q)}&limit=50`, signal);
+      } catch (proxy) {
+        if (signal?.aborted) throw proxy;
+        throw new Error(`직접: ${describeError(direct)} / 서버 경유: ${describeError(proxy)}`);
+      }
+    }
   }
-  return parseRedditSearch(data, null);
+  if (stats) stats.scanned += countPosts(data);
+  return parseRedditSearch(data, helper);
 }
