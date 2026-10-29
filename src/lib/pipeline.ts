@@ -22,6 +22,8 @@ export interface PipelineInput {
   features: string;
   seconds: number;
   licenseMode: LicenseMode;
+  /** 로컬 도우미 주소 (YouTube 영상에 필요) */
+  helper: string | null;
   sourceCount: number;
   musicFile: File | null;
 }
@@ -48,8 +50,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   events.step("topic", `"${input.topic}" 주제를 해석하는 중`);
   const topic = await resolveTopic(input.topic, signal);
 
-  events.step("search", `${topic.englishLabel ?? topic.label} 관련 공개 영상을 찾는 중`);
-  const candidates = await findSources(topic, style.searchHints, input.licenseMode, signal);
+  const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
+  events.step("search", `${where}에서 ${topic.label} 영상을 찾는 중`);
+  const candidates = await findSources(topic, style.searchHints, input.licenseMode, input.helper, signal);
   events.candidates(candidates);
   if (!candidates.length) {
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";

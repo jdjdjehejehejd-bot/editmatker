@@ -2,7 +2,7 @@
 
 **[▶ 앱 실행하기](https://editmatker.vercel.app)**
 
-주제와 특징만 적으면 관련 영상을 알아서 찾고, 하이라이트 장면만 뽑아 비트에 맞춰 편집한 에딧 영상을 만들어 줍니다. 서버나 API 키 없이 모든 처리가 브라우저 안에서 이루어집니다.
+주제와 특징만 적으면 YouTube·Reddit에서 관련 영상을 알아서 찾고, 하이라이트 장면만 뽑아 비트에 맞춰 편집한 에딧 영상을 만들어 줍니다. 편집과 렌더링은 모두 브라우저 안에서 이루어지고 API 키가 필요 없습니다. YouTube 영상을 쓰려면 내 컴퓨터에서 [로컬 도우미](#youtube-로컬-도우미)를 켜 두면 됩니다.
 
 ```
 주제: 아폴로 11호
@@ -13,10 +13,10 @@
 ## 작동 방식
 
 1. **주제 해석** — Wikidata에서 주제를 찾아 영어 이름, Commons 분류, 대표 영상 파일을 얻습니다. 한국어로 입력해도 됩니다.
-2. **영상 검색** — Wikimedia Commons와 Internet Archive에서 관련 영상을 찾습니다. 영상 라이선스는 두 가지 중에서 고릅니다.
-   - **모든 공개 영상**(기본): 비영리(NC)·변경금지(ND)이거나 라이선스가 표시되지 않은 영상도 씁니다. 이런 영상에는 "재사용 허가 확인 필요" 표시가 붙습니다.
-   - **재사용 가능만**: 2차 편집이 허용되는 **Public domain · CC0 · CC BY · CC BY-SA** 영상만 씁니다.
-3. **하이라이트 분석** — 영상을 내려받아(파일당 최대 90MB, 가능하면 480p 변환본) 프레임마다 움직임·색감·밝기·소리 세기와 장면 전환을 측정합니다. 특징에 맞춘 가중치로 점수를 매기고, 장면 전환이 끼지 않은 가장 좋은 구간을 골라냅니다.
+2. **영상 검색** — 영상 라이선스 선택에 따라 찾는 곳이 달라집니다.
+   - **모든 공개 영상**(기본): **YouTube**(입력한 언어로 검색)와 **Reddit**(영어 이름으로 검색, Reddit에 올라온 영상과 공유된 YouTube 링크)을 먼저 찾고, Wikimedia Commons·Internet Archive로 보충합니다. 라이선스와 관계없이 쓰므로 영상마다 "재사용 허가 확인 필요" 표시가 붙습니다.
+   - **재사용 가능만**: Wikimedia Commons·Internet Archive에서 2차 편집이 허용되는 **Public domain · CC0 · CC BY · CC BY-SA** 영상만 씁니다.
+3. **하이라이트 분석** — 영상을 내려받아(파일당 최대 150MB, 가능하면 480p) 프레임마다 움직임·색감·밝기·소리 세기와 장면 전환을 측정합니다. 특징에 맞춘 가중치로 점수를 매기고, 장면 전환이 끼지 않은 가장 좋은 구간을 골라냅니다.
 4. **비트 편집** — 인트로 → 드롭 → 아웃트로 구조로 컷을 박자에 맞춰 배치합니다. 가장 좋은 장면은 드롭에 들어가고, 같은 영상이 연달아 나오지 않게 섞습니다.
 5. **음악** — 분위기에 맞는 비트를 Web Audio로 직접 작곡합니다(저작권 걱정 없음). 내 음악 파일을 넣으면 BPM·박자 위치·드롭 지점을 자동으로 찾아 맞춥니다.
 6. **렌더링** — 캔버스에서 색 보정, 줌 무빙, 비트 펄스·흔들림, 플래시 컷, 글리치, 슬로모션, 필름 그레인, 레터박스, 타이틀을 입혀 실시간으로 녹화합니다. 영상 끝에는 출처 크레딧 카드가 자동으로 들어갑니다.
@@ -42,6 +42,25 @@ pnpm build    # 타입 검사 + dist/ 정적 빌드
 
 Node.js 22+, pnpm 10+. 최신 Chrome · Edge · Firefox 데스크톱을 권장합니다(렌더링에 `MediaRecorder`, Web Audio 사용). 렌더링은 실시간으로 진행되므로 그동안 탭을 띄워 두세요.
 
+### YouTube 로컬 도우미
+
+브라우저는 보안 정책(CORS) 때문에 YouTube 영상 파일을 직접 받을 수 없습니다. 그래서 내 컴퓨터에서 작은 도우미 서버를 켜면, 도우미가 [yt-dlp](https://github.com/yt-dlp/yt-dlp)로 영상을 받아 웹앱에 넘겨 줍니다. 도우미가 없으면 YouTube 없이 Reddit 영상(소리 없는 파일)과 Commons·Internet Archive만 씁니다.
+
+1. yt-dlp와 ffmpeg 설치
+   - macOS: `brew install yt-dlp ffmpeg`
+   - Windows: `winget install yt-dlp.yt-dlp Gyan.FFmpeg`
+   - Linux: `pipx install yt-dlp` 후 배포판 패키지로 `ffmpeg` 설치
+2. 저장소를 받아 도우미 실행
+   ```bash
+   git clone https://github.com/jdjdjehejehejd-bot/editmatker.git
+   cd editmatker
+   pnpm install && pnpm build
+   pnpm helper
+   ```
+3. https://editmatker.vercel.app 에서 **YouTube 연결**을 누르거나, 도우미가 띄운 http://localhost:8787 을 엽니다. 브라우저가 "로컬 네트워크 접근"을 물으면 허용하세요. Safari는 공개 사이트에서 localhost 접속을 막으므로 http://localhost:8787 을 쓰세요.
+
+도우미는 내 컴퓨터(127.0.0.1)에서만 열리고, editmatker 웹앱 주소에서 온 요청만 받으며, YouTube·Reddit 주소만 내려받습니다. 받은 영상은 임시 폴더에 2시간 동안 캐시됩니다. YouTube가 "로봇이 아닌지 확인"을 요구하면 `EDITMATKER_YTDLP_ARGS="--cookies-from-browser chrome" pnpm helper`처럼 브라우저 쿠키를 쓰게 할 수 있습니다.
+
 ### 배포
 
 Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배포됩니다(다른 브랜치·PR은 미리보기 배포). Vercel이 Vite 프로젝트를 자동 인식하므로 별도 설정 없이 `pnpm build` 결과물인 `dist/`를 그대로 올립니다.
@@ -49,7 +68,9 @@ Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배�
 ### 구조
 
 - `src/lib/style.ts` — 특징 문장 → 무드·BPM·색감·효과·검색 힌트
-- `src/lib/sources.ts` — Wikidata 주제 해석, Commons · Internet Archive 검색, 라이선스 허용 목록, 다운로드
+- `src/lib/sources.ts` — Wikidata 주제 해석, Commons · Internet Archive 검색, 라이선스 판정, 출처 통합·정렬, 다운로드
+- `src/lib/social.ts` — YouTube · Reddit 검색과 로컬 도우미 연결
+- `helper/server.mjs` — yt-dlp로 YouTube · Reddit 영상을 받아 주는 로컬 도우미
 - `src/lib/analyze.ts` — 브라우저에서 프레임·오디오 측정
 - `src/lib/highlights.ts` — 점수 계산과 하이라이트 구간 선택
 - `src/lib/plan.ts` — 박자 기반 타임라인 구성
@@ -59,8 +80,7 @@ Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배�
 
 ## 권리 안내
 
-- **모든 공개 영상** 모드로 만든 결과물에는 재사용 허가가 없는 영상이 들어갈 수 있습니다. 개인 감상은 괜찮지만, 공개적으로 올리거나 상업적으로 쓰려면 원작자 허락이 필요할 수 있습니다. 자유롭게 공유하려면 **재사용 가능만**을 고르세요.
+- **모든 공개 영상** 모드로 만든 결과물에는 YouTube·Reddit 영상처럼 재사용 허가가 없는 영상이 들어갑니다. 개인 감상은 괜찮지만, 공개적으로 올리거나 상업적으로 쓰려면 원작자 허락이 필요할 수 있습니다. YouTube 약관은 영상 내려받기를 제한하므로 도우미 사용은 본인 책임입니다. 자유롭게 공유하려면 **재사용 가능만**을 고르세요.
 - 라이선스·작성자 정보는 업로더가 입력한 메타데이터이며 앱이 법적 정확성이나 인물의 초상권 등을 검증하지 않습니다. 공유 전에 크레딧의 원본 페이지를 확인하세요.
 - 어떤 모드든 CC BY / CC BY-SA 영상은 저작자 표시가 필요합니다(크레딧 카드와 편집 계획 JSON에 자동 포함). CC BY-SA 자료가 들어간 결과물은 같은 조건으로 공유해야 합니다.
-- YouTube 등 파일 내려받기를 허용하지 않는 플랫폼의 영상은 가져오지 않습니다.
-- 영상은 브라우저 메모리에서만 처리되며 어디에도 업로드·저장되지 않습니다.
+- 영상은 브라우저 메모리(도우미를 쓰면 내 컴퓨터의 임시 폴더)에서만 처리되며 어디에도 업로드되지 않습니다.

@@ -8,6 +8,7 @@
     "dev": "vite",
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview",
+    "helper": "node helper/server.mjs",
     "check": "tsc --noEmit",
     "test": "vitest run",
     "format": "prettier --write ."
