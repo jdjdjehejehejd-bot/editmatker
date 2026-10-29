@@ -4,7 +4,7 @@ import { detectCuts, type FrameSample } from "./highlights";
 
 const W = 64;
 const H = 36;
-const MAX_SAMPLES = 240;
+const DEFAULT_MAX_SAMPLES = 240;
 
 export interface VideoAnalysis {
   duration: number;
@@ -81,12 +81,13 @@ export async function analyzeVideo(
   blob: Blob,
   url: string,
   onProgress: (ratio: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxSamples = DEFAULT_MAX_SAMPLES
 ): Promise<VideoAnalysis> {
   const video = await loadVideo(url, signal);
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
   if (duration < 2) throw new Error("영상이 너무 짧아요.");
-  const step = Math.max(0.25, duration / MAX_SAMPLES);
+  const step = Math.max(0.25, duration / maxSamples);
   const times: number[] = [];
   for (let t = 0; t < duration - 0.1; t += step) times.push(t);
 

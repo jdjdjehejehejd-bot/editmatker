@@ -115,7 +115,8 @@ export function parseRedditSearch(data: any, helper: string | null): SourceVideo
       if (!inRange(duration)) return;
       const pageUrl = `https://www.reddit.com${post.permalink}`;
       // 도우미가 없으면 소리 없는 fallback 영상만 쓸 수 있습니다(배경음악으로 대체되므로 편집에는 지장 없음).
-      const mediaUrl = helper ? helperMediaUrl(helper, pageUrl) : typeof video.fallback_url === "string" ? video.fallback_url : null;
+      const direct = typeof video.fallback_url === "string" ? video.fallback_url : null;
+      const mediaUrl = helper ? helperMediaUrl(helper, pageUrl) : direct;
       if (!mediaUrl) return;
       sources.push({
         id: `reddit:${post.name ?? post.id}`,
@@ -127,6 +128,8 @@ export function parseRedditSearch(data: any, helper: string | null): SourceVideo
         reusable: false,
         pageUrl,
         mediaUrl,
+        // 브라우저가 v.redd.it을 직접 못 받으면 같은 사이트의 /api/media 프록시로 다시 시도합니다.
+        fallbackUrl: !helper && direct ? `${proxyBase()}/api/media?url=${encodeURIComponent(direct)}` : undefined,
         poster: post.preview?.images?.[0]?.source?.url ?? (String(post.thumbnail ?? "").startsWith("http") ? post.thumbnail : null),
         duration,
         bytes: null,
@@ -153,12 +156,32 @@ export async function searchYouTube(topic: TopicInfo, hints: string[], helper: s
   return parseYouTubeSearch(await response.json(), helper);
 }
 
-export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
-  const q = socialQuery(topic, hints, true);
-  const url = helper
-    ? `${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=25`
-    : `https://www.reddit.com/search.json?${new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "25", raw_json: "1" })}`;
+/** 배포된 웹앱의 /api 함수 주소. 로컬 개발(vite)에는 함수가 없으므로 배포 주소를 씁니다. */
+export function proxyBase() {
+  if (typeof location === "undefined" || /^(localhost|127\.0\.0\.1)$/.test(location.hostname)) return "https://editmatker.vercel.app";
+  return location.origin;
+}
+
+async function fetchJson(url: string, signal?: AbortSignal) {
   const response = await fetch(url, { signal });
   if (!response.ok) throw new Error(`Reddit 검색 실패 (${response.status})`);
-  return parseRedditSearch(await response.json(), helper);
+  return response.json();
+}
+
+/**
+ * 도우미가 있으면 도우미로, 없으면 휴대폰 브라우저에서 Reddit을 직접 부르고(사용자 IP라 잘 막히지 않음),
+ * 그것도 막히면 Vercel 함수 프록시를 거칩니다.
+ */
+export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
+  const q = socialQuery(topic, hints, true);
+  if (helper) return parseRedditSearch(await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=25`, signal), helper);
+  const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "25", raw_json: "1" });
+  let data: unknown;
+  try {
+    data = await fetchJson(`https://www.reddit.com/search.json?${params}`, signal);
+  } catch (error) {
+    if (signal?.aborted) throw error;
+    data = await fetchJson(`${proxyBase()}/api/reddit?q=${encodeURIComponent(q)}&limit=25`, signal);
+  }
+  return parseRedditSearch(data, null);
 }

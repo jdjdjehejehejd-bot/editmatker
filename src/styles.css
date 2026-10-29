@@ -125,7 +125,12 @@ input[type="range"] { accent-color: var(--accent); }
 @media (max-width: 880px) {
   .app { padding: 0 16px 32px; }
   .layout { grid-template-columns: 1fr; }
-  .stage { position: static; order: -1; }
+  .stage { position: static; scroll-margin-top: 12px; }
+  .tagline { display: none; }
+  /* iOS는 16px보다 작은 입력창에 초점이 가면 화면을 확대합니다 */
+  .field input:not([type="range"]):not([type="file"]), .field textarea { font-size: 16px; }
+  .segmented button { padding: 10px 4px; }
+  .chip { padding: 7px 12px; }
 }
 @media (max-width: 480px) {
   .row { grid-template-columns: 1fr; gap: 0; }
