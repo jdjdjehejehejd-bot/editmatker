@@ -13,33 +13,71 @@ export interface VideoAnalysis {
   samples: FrameSample[];
 }
 
+const LOAD_TIMEOUT_MS = 20_000;
+
+/**
+ * 화면 밖에 숨긴 video 요소를 만듭니다. iOS Safari는 문서에 붙지 않았거나 한 번도 재생하지 않은
+ * 영상은 데이터를 받지 않아서, 화면에 붙인 뒤 잠깐 재생했다 멈춰 데이터를 받게 합니다.
+ */
+export function createHiddenVideo(): HTMLVideoElement {
+  const video = document.createElement("video");
+  video.muted = true;
+  video.defaultMuted = true;
+  video.playsInline = true;
+  video.setAttribute("playsinline", "");
+  video.setAttribute("muted", "");
+  video.preload = "auto";
+  video.style.cssText = "position:fixed;left:0;top:0;width:2px;height:2px;opacity:0;pointer-events:none;";
+  document.body.appendChild(video);
+  return video;
+}
+
+export function disposeVideo(video: HTMLVideoElement) {
+  video.pause();
+  video.removeAttribute("src");
+  video.load();
+  video.remove();
+}
+
 export function loadVideo(url: string, signal?: AbortSignal): Promise<HTMLVideoElement> {
   return new Promise((resolve, reject) => {
-    const video = document.createElement("video");
-    video.muted = true;
-    video.playsInline = true;
-    video.preload = "auto";
-    const cleanup = () => {
+    const video = createHiddenVideo();
+    let settled = false;
+    const finish = (error?: Error) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
       video.removeEventListener("loadeddata", onLoaded);
+      video.removeEventListener("canplay", onLoaded);
+      video.removeEventListener("loadedmetadata", onMetadata);
       video.removeEventListener("error", onError);
       signal?.removeEventListener("abort", onAbort);
+      if (error) {
+        disposeVideo(video);
+        reject(error);
+      } else {
+        video.pause();
+        resolve(video);
+      }
     };
-    const onLoaded = () => {
-      cleanup();
-      resolve(video);
+    const onLoaded = () => finish();
+    const onMetadata = () => {
+      // iOS: 재생을 한 번 시작해야 프레임 데이터를 받습니다.
+      void video.play().then(() => video.pause(), () => undefined);
     };
     const onError = () => {
-      cleanup();
-      reject(new Error("이 브라우저에서 재생할 수 없는 영상 형식이에요."));
+      const code = video.error?.code;
+      finish(new Error(code === 4 ? "이 브라우저에서 재생할 수 없는 영상 형식이에요." : `영상을 열지 못했어요 (오류 ${code ?? "?"})`));
     };
-    const onAbort = () => {
-      cleanup();
-      reject(new DOMException("Aborted", "AbortError"));
-    };
+    const onAbort = () => finish(new DOMException("Aborted", "AbortError") as unknown as Error);
+    const timer = setTimeout(() => finish(new Error("영상을 여는 데 너무 오래 걸려요.")), LOAD_TIMEOUT_MS);
     video.addEventListener("loadeddata", onLoaded);
+    video.addEventListener("canplay", onLoaded);
+    video.addEventListener("loadedmetadata", onMetadata);
     video.addEventListener("error", onError);
     signal?.addEventListener("abort", onAbort);
     video.src = url;
+    video.load();
   });
 }
 
@@ -136,7 +174,6 @@ export async function analyzeVideo(
   const cuts = detectCuts(raw.map(r => r.motion));
   const samples = raw.map((r, i) => ({ ...r, audio: audio[i] ?? 0, cut: cuts[i] }));
   const result = { duration, width: video.videoWidth, height: video.videoHeight, samples };
-  video.removeAttribute("src");
-  video.load();
+  disposeVideo(video);
   return result;
 }

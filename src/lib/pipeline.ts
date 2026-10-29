@@ -7,7 +7,7 @@ import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
 import { socialQueries } from "./social";
-import { downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
+import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
 export type StepId = "topic" | "search" | "download" | "analyze" | "plan" | "render";
@@ -69,6 +69,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const approxCuts = Math.ceil(input.seconds / ((60 / bpm) * 2));
 
   const loaded: LoadedSource[] = [];
+  const failures: string[] = [];
   for (const candidate of candidates) {
     if (loaded.length >= input.sourceCount) break;
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
@@ -93,10 +94,15 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       }
     } catch (error) {
       if (signal.aborted) throw error;
-      events.skipped(candidate, error instanceof Error ? error.message : "알 수 없는 오류");
+      const reason = describeError(error);
+      failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
+      events.skipped(candidate, reason);
     }
   }
-  if (!loaded.length) throw new Error("찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요.");
+  if (!loaded.length) {
+    const more = failures.length > 6 ? `\n…외 ${failures.length - 6}개` : "";
+    throw new Error(`찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요.\n\n${failures.slice(0, 6).join("\n")}${more}`);
+  }
 
   events.step("plan", "비트에 맞춰 컷을 배치하는 중");
   const plan = buildPlan({
