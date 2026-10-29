@@ -59,6 +59,13 @@ input[type="range"] { accent-color: var(--accent); }
 
 .file { display: flex; flex-direction: column; gap: 4px; }
 .file input { font-size: 12px; max-width: 100%; }
+.helper { font-size: 12px; line-height: 1.6; color: var(--muted); background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 10px 12px; margin-bottom: 16px; }
+.helper b { color: #f2c94b; margin-right: 4px; font-weight: 650; }
+.helper.on b { color: var(--ok); }
+.helper code { background: #0006; border-radius: 5px; padding: 1px 6px; color: var(--ink); }
+.helper a { color: var(--accent); }
+.helper .missing { display: block; margin-top: 6px; font-style: normal; color: #ff8f7a; }
+.helper .connect { margin-left: 8px; color: var(--ink); border-color: var(--accent); }
 .hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
 .badge { display: inline-block; margin-left: 6px; font-style: normal; color: #f2c94b; border: 1px solid #f2c94b55; border-radius: 5px; padding: 0 5px; font-size: 10px; }
 .file small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

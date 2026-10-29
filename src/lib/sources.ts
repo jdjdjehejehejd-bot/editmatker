@@ -1,9 +1,10 @@
-// 주제를 해석해 관련 영상을 찾습니다. 기본은 라이선스와 관계없이 공개된 영상 전체이고,
-// 원하면 2차 편집이 허용되는 라이선스만으로 좁힐 수 있습니다.
-// 모든 요청은 CORS를 허용하는 공개 API(Wikidata, Wikimedia Commons, Internet Archive)로
-// 브라우저에서 직접 보내므로 서버나 API 키가 필요 없습니다.
+// 주제를 해석해 관련 영상을 찾습니다. 기본은 YouTube·Reddit 위주로 라이선스와 관계없이 찾고,
+// Wikimedia Commons·Internet Archive는 보충용으로 씁니다. 원하면 2차 편집이 허용되는
+// 라이선스(Commons·Internet Archive)만으로 좁힐 수 있습니다.
 
-export type Provider = "Wikimedia Commons" | "Internet Archive";
+import { searchReddit, searchYouTube } from "./social";
+
+export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive";
 
 /** reusable: 재사용 가능한 라이선스만, any: 라이선스와 관계없이 공개된 영상 전체 */
 export type LicenseMode = "reusable" | "any";
@@ -34,7 +35,7 @@ export interface TopicInfo {
   wikidataVideos: string[];
 }
 
-export const MAX_SOURCE_BYTES = 90 * 1024 * 1024;
+export const MAX_SOURCE_BYTES = 150 * 1024 * 1024;
 const MIN_DURATION = 3;
 const MAX_DURATION = 25 * 60;
 
@@ -315,19 +316,26 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
   return sources.filter((s): s is SourceVideo => s !== null);
 }
 
-/** 두 저장소를 함께 검색하고 관련도 순으로 정렬합니다. */
-export async function findSources(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
-  const [commons, archive] = await Promise.all([
-    searchCommons(topic, hints, mode, signal).catch(error => {
+/**
+ * 모든 출처를 함께 검색하고 관련도 순으로 정렬합니다.
+ * YouTube는 로컬 도우미(`helper`)가 있을 때만, YouTube·Reddit은 "모든 공개 영상" 모드에서만 씁니다.
+ */
+export async function findSources(topic: TopicInfo, hints: string[], mode: LicenseMode, helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
+  const settle = (promise: Promise<SourceVideo[]>) =>
+    promise.catch(error => {
       if (signal?.aborted) throw error;
       return [] as SourceVideo[];
-    }),
-    searchArchive(topic, hints, mode, signal).catch(error => {
-      if (signal?.aborted) throw error;
-      return [] as SourceVideo[];
-    }),
+    });
+  const social = mode === "any";
+  const results = await Promise.all([
+    social && helper ? settle(searchYouTube(topic, hints, helper, signal)) : Promise.resolve([]),
+    social ? settle(searchReddit(topic, hints, helper, signal)) : Promise.resolve([]),
+    settle(searchCommons(topic, hints, mode, signal)),
+    settle(searchArchive(topic, hints, mode, signal)),
   ]);
-  return rankSources([...commons, ...archive], topic);
+  const unique = new Map<string, SourceVideo>();
+  for (const source of results.flat()) if (!unique.has(source.id)) unique.set(source.id, source);
+  return rankSources([...unique.values()], topic);
 }
 
 export function rankSources(sources: SourceVideo[], topic: TopicInfo): SourceVideo[] {
@@ -350,7 +358,10 @@ export async function downloadSource(
   signal?: AbortSignal
 ): Promise<Blob> {
   const response = await fetch(source.mediaUrl, { signal });
-  if (!response.ok || !response.body) throw new Error(`다운로드 실패 (${response.status})`);
+  if (!response.ok || !response.body) {
+    const detail = (await response.json().catch(() => null))?.error;
+    throw new Error(detail ? `다운로드 실패: ${detail}` : `다운로드 실패 (${response.status})`);
+  }
   const total = Number(response.headers.get("content-length")) || source.bytes || 0;
   if (total > MAX_SOURCE_BYTES) throw new Error("파일이 너무 커서 건너뛰었어요.");
   const reader = response.body.getReader();

@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runPipeline, type LoadedSource, type PipelineResult, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
+import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
 
@@ -47,7 +48,23 @@ export default function App() {
   const preview = useMemo(() => parseStyle(features), [features]);
   const [width, height] = ASPECT_SIZE[aspect];
 
+  const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
+  const [checkingHelper, setCheckingHelper] = useState(false);
+  const [helperMissing, setHelperMissing] = useState(false);
+
+  const connectHelper = async () => {
+    setCheckingHelper(true);
+    const status = await detectHelper();
+    setHelper(status);
+    setHelperMissing(!status.base);
+    setCheckingHelper(false);
+    return status;
+  };
+
   useEffect(() => () => abortRef.current?.abort(), []);
+  useEffect(() => {
+    if (rememberedHelper()) void connectHelper();
+  }, []);
 
   const reset = () => {
     loaded.forEach(s => URL.revokeObjectURL(s.url));
@@ -67,8 +84,10 @@ export default function App() {
     abortRef.current = controller;
     setStatus("running");
     try {
+      // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
+      const currentHelper = rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -212,10 +231,35 @@ export default function App() {
             />
             <small className="hint">
               {licenseMode === "any"
-                ? "라이선스와 관계없이 찾은 영상을 모두 씁니다. 결과물을 공개적으로 올리려면 원작자 허락이 필요할 수 있어요."
-                : "Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 결과물을 자유롭게 공유할 수 있어요."}
+                ? "YouTube·Reddit 위주로 라이선스와 관계없이 찾습니다. 결과물을 공개적으로 올리려면 원작자 허락이 필요할 수 있어요."
+                : "Wikimedia Commons·Internet Archive의 Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 결과물을 자유롭게 공유할 수 있어요."}
             </small>
           </div>
+
+          {licenseMode === "any" && (
+            <div className={`helper ${helper.ytDlp ? "on" : ""}`}>
+              {helper.ytDlp ? (
+                <>
+                  <b>● YouTube 연결됨</b> 로컬 도우미(yt-dlp {helper.ytDlp})로 YouTube·Reddit 영상을 받아요.
+                </>
+              ) : helper.base ? (
+                <>
+                  <b>● 도우미에 yt-dlp가 없어요</b> yt-dlp를 설치한 뒤 도우미를 다시 켜 주세요.
+                </>
+              ) : (
+                <>
+                  <b>○ YouTube 꺼짐</b> 지금은 Reddit 영상만 찾아요. YouTube까지 쓰려면 내 컴퓨터에서 로컬 도우미(<code>pnpm helper</code>)를 켠 뒤 연결하세요.{" "}
+                  <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미" target="_blank" rel="noreferrer">
+                    방법 보기
+                  </a>
+                  <button type="button" className="chip connect" onClick={connectHelper} disabled={checkingHelper}>
+                    {checkingHelper ? "확인 중…" : "YouTube 연결"}
+                  </button>
+                  {helperMissing && <em className="missing">도우미를 찾지 못했어요. 터미널에서 실행 중인지 확인하세요.</em>}
+                </>
+              )}
+            </div>
+          )}
 
           {status === "running" ? (
             <button className="primary" type="button" onClick={stop}>
@@ -295,7 +339,7 @@ export default function App() {
           <div className="grid">
             {loaded.map(source => (
               <article key={source.id} className="card">
-                {source.poster ? <img src={source.poster} alt="" loading="lazy" /> : <div className="poster" />}
+                {source.poster ? <img src={source.poster} alt="" loading="lazy" onError={e => (e.currentTarget.style.visibility = "hidden")} /> : <div className="poster" />}
                 <div className="card-body">
                   <a href={source.pageUrl} target="_blank" rel="noreferrer" className="title">
                     <i style={{ background: colorOf(source.id) }} />
@@ -335,7 +379,7 @@ export default function App() {
 
       <footer className="notes">
         <p>
-          영상은 Wikimedia Commons와 Internet Archive에서 가져오며, 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>을 고르면 비영리(NC)·변경금지(ND)이거나 라이선스가 표시되지 않은 영상도 쓰므로, 결과물을 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 결과물을 자유롭게 공유하려면 <b>재사용 가능만</b>(Public domain · CC0 · CC BY · CC BY-SA)을 고르세요. CC BY-SA 자료가 포함되면 결과물도 같은 조건으로 공유해야 합니다.
+          영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>을 고르면 비영리(NC)·변경금지(ND)이거나 라이선스가 표시되지 않은 영상도 쓰므로, 결과물을 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 결과물을 자유롭게 공유하려면 <b>재사용 가능만</b>(Public domain · CC0 · CC BY · CC BY-SA)을 고르세요. CC BY-SA 자료가 포함되면 결과물도 같은 조건으로 공유해야 합니다.
         </p>
         <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다. 최신 Chrome · Edge · Firefox 데스크톱을 권장합니다.</p>
       </footer>
