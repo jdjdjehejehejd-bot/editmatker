@@ -134,6 +134,11 @@ textarea:focus { border-color: #ef9c84; box-shadow: 0 0 0 3px #f26a4b14; }
 .rights-confirm strong { display: block; font-size: 9px; font-weight: 650; }
 .rights-confirm p { margin: 4px 0 0; color: #8b8d84; font-size: 8px; line-height: 1.5; }
 .rights-confirm > svg { flex: 0 0 auto; color: #6a9879; margin-top: 1px; }
+.auto-source-panel { margin: 0 0 10px; padding: 11px; border: 1px solid #d7e4d8; border-radius: 9px; background: #f4f8f3; }
+.auto-source-button { width: 100%; min-height: 38px; display: flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 10px; border: 1px solid #c8dccd; border-radius: 7px; background: #e9f2e9; color: #315d43; font-size: 10px; font-weight: 650; transition: background .16s, border-color .16s; }
+.auto-source-button:hover:not(:disabled) { border-color: #83b392; background: #e0eee1; }
+.auto-source-button:disabled { opacity: .55; cursor: not-allowed; }
+.auto-source-panel > small { display: block; margin-top: 7px; color: #788579; font-size: 8px; line-height: 1.45; text-align: center; }
 .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 10px; }
 .upload-tile { min-height: 122px; display: flex; flex-direction: column; align-items: flex-start; text-align: left; position: relative; padding: 11px 10px 9px; border: 1px dashed #dcdad2; border-radius: 8px; background: #fffefa; transition: border-color .15s, background .15s; }
 .upload-tile:hover:not(:disabled) { border-color: #ee9c85; background: #fffaf7; }
@@ -155,6 +160,9 @@ textarea:focus { border-color: #ef9c84; box-shadow: 0 0 0 3px #f26a4b14; }
 .media-name { min-width: 0; flex: 1; }
 .media-name strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #484a43; font-size: 9px; font-weight: 600; }
 .media-name small { display: block; color: #92948b; font-size: 8px; margin-top: 3px; }
+.source-attribution-link { color: #6b806d; text-decoration: underline; text-decoration-color: #c8d5c8; text-underline-offset: 2px; }
+.source-attribution-link:hover { color: #315d43; }
+.license-chip { display: inline-grid; place-items: center; flex: 0 0 auto; min-width: 24px; height: 20px; padding: 0 5px; border: 1px solid #d7e4d8; border-radius: 5px; background: #f2f7f1; color: #54705a; font: 700 8px ui-monospace, monospace; }
 .duration-chip { border: 1px solid #e9e8e2; border-radius: 4px; color: #787a72; padding: 3px 5px; font: 8px ui-monospace, monospace; }
 .permission-check { color: #5a9a74; flex: 0 0 auto; }
 .remove-button { border: 0; background: transparent; color: #b2b2aa; padding: 3px; display: grid; place-items: center; }

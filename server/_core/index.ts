@@ -14,6 +14,7 @@ async function startServer() {
   const app = express();
   const server = createServer(app);
   app.set("trust proxy", 1);
+  app.use("/api/trpc/editmaker.autoSource", rateLimit("auto-source", 3, 10 * 60_000));
   app.use("/api/trpc", rateLimit("trpc", 30, 60_000));
   app.use("/api/media/session", rateLimit("media-session", 20, 10 * 60_000));
   app.use("/api/media/upload", rateLimit("upload", 12, 10 * 60_000));

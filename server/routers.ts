@@ -3,7 +3,7 @@ import { TRPCError } from "@trpc/server";
 import { getSessionCookieOptions } from "./_core/cookies";
 import { systemRouter } from "./_core/systemRouter";
 import { publicProcedure, router } from "./_core/trpc";
-import { createEditDraft, editmakerSchemas, searchPublicVideos } from "./editmaker";
+import { createEditDraft, editmakerSchemas, importOpenCommonsVideos, searchPublicVideos } from "./editmaker";
 
 export const appRouter = router({
     // if you need to use socket.io, read and register route in server/_core/index.ts, all api should start with '/api/' so that the gateway can route correctly
@@ -25,6 +25,13 @@ export const appRouter = router({
         return { videos, source: "YouTube", rightsNotice: "검색 결과는 참고 링크입니다. 사용 권한이 확인된 파일만 편집에 추가할 수 있어요." };
       } catch (error) {
         throw new TRPCError({ code: "SERVICE_UNAVAILABLE", message: error instanceof Error ? error.message : "자료 검색에 실패했어요." });
+      }
+    }),
+    autoSource: publicProcedure.input(editmakerSchemas.autoSource).mutation(async ({ input }) => {
+      try {
+        return await importOpenCommonsVideos(input);
+      } catch (error) {
+        throw new TRPCError({ code: "BAD_REQUEST", message: error instanceof Error ? error.message : "공개 라이선스 영상을 가져오지 못했어요." });
       }
     }),
     draft: publicProcedure.input(editmakerSchemas.draft).mutation(async ({ input }) => {

@@ -8,12 +8,21 @@ import { z } from "zod";
 import express, { type Express, type Request, type Response } from "express";
 
 const MAX_UPLOAD_BYTES = 80 * 1024 * 1024;
+const MAX_AUTO_FILE_BYTES = 50 * 1024 * 1024;
+const MAX_AUTO_SOURCES = 3;
 const ASSET_TTL_MS = 2 * 60 * 60 * 1000;
+type OpenMediaSource = { provider: "Wikimedia Commons"; fileTitle: string; author: string; license: string; licenseUrl: string | null; pageUrl: string; originalUrl: string; uploadedAt: string | null };
+type MediaAsset = { filePath: string; name: string; kind: "video" | "audio"; duration: number; createdAt: number; ownerToken: string; source?: OpenMediaSource };
 const sessions = new Map<string, number>();
-const assets = new Map<string, { filePath: string; name: string; kind: "video" | "audio"; duration: number; createdAt: number; ownerToken: string }>();
-const allowedExtensions = new Set([".mp4", ".mov", ".m4v", ".webm", ".mp3", ".m4a", ".wav", ".aac"]);
+const assets = new Map<string, MediaAsset>();
+const allowedExtensions = new Set([".mp4", ".mov", ".m4v", ".webm", ".ogv", ".mp3", ".m4a", ".wav", ".aac"]);
 
 type SearchVideo = { id: string; title: string; channel: string; published: string; duration: number | null; views: number | null; thumbnail: string | null; url: string; rightsStatus: "unverified" };
+
+function decodeCodePoint(value: number): string {
+  if (!Number.isInteger(value) || value <= 0 || value > 0x10ffff || (value >= 0xd800 && value <= 0xdfff)) return "";
+  return String.fromCodePoint(value);
+}
 
 function run(command: string, args: string[], timeoutMs = 30_000) {
   return new Promise<{ stdout: string; stderr: string }>((resolve, reject) => {
@@ -105,6 +114,136 @@ export async function searchPublicVideos(input: z.infer<typeof searchResultSchem
   return videos;
 }
 
+const autoSourceInputSchema = z.object({
+  mediaSession: z.string().min(32).max(128),
+  person: z.string().trim().min(1).max(100),
+});
+
+function plainMetadata(value: unknown, maxLength = 240): string {
+  if (typeof value !== "string") return "";
+  return value.replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/gi, " ").replace(/&amp;/gi, "&").replace(/&quot;/gi, '"')
+    .replace(/&#39;|&apos;/gi, "'").replace(/&lt;/gi, "<").replace(/&gt;/gi, ">")
+    .replace(/&#(\d+);/g, (_match, code) => decodeCodePoint(Number(code)))
+    .replace(/&#x([a-f0-9]+);/gi, (_match, code) => decodeCodePoint(parseInt(code, 16)))
+    .replace(/[\u0000-\u001f\u007f]+/g, " ").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function allowedCommonsLicense(label: string): { label: string; licenseUrl: string | null } | null {
+  const normalized = label.replace(/\s+/g, " ").trim();
+  if (/^(public domain|cc0(?: 1\.0)?|cc0 1\.0 universal)$/i.test(normalized)) {
+    const isCc0 = normalized.toLowerCase().startsWith("cc0");
+    return { label: isCc0 ? "CC0 1.0" : "Public domain", licenseUrl: isCc0 ? "https://creativecommons.org/publicdomain/zero/1.0/" : null };
+  }
+  const match = /^CC BY(-SA)? (1\.0|2\.0|2\.5|3\.0|4\.0)$/i.exec(normalized);
+  if (!match) return null;
+  const family = match[1] ? "by-sa" : "by";
+  const version = match[2];
+  return { label: `CC BY${match[1] ? "-SA" : ""} ${version}`, licenseUrl: `https://creativecommons.org/licenses/${family}/${version}/` };
+}
+
+async function readLimitedBody(response: globalThis.Response, maxBytes: number): Promise<Buffer> {
+  const length = Number(response.headers.get("content-length"));
+  if (Number.isFinite(length) && length > maxBytes) throw new Error("파일 크기 제한을 넘는 공개 영상을 건너뛰었어요.");
+  if (!response.body) throw new Error("공개 영상을 읽을 수 없어요.");
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let total = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    total += value.byteLength;
+    if (total > maxBytes) {
+      await reader.cancel();
+      throw new Error("파일 크기 제한을 넘는 공개 영상을 건너뛰었어요.");
+    }
+    chunks.push(value);
+  }
+  return Buffer.concat(chunks.map(chunk => Buffer.from(chunk)), total);
+}
+
+export async function importOpenCommonsVideos(input: z.infer<typeof autoSourceInputSchema>) {
+  cleanExpiredAssets();
+  if (!isMediaSession(input.mediaSession)) throw new Error("편집 세션이 만료됐어요. 페이지를 새로고침해 주세요.");
+  const owned = [...assets.values()].filter(asset => asset.ownerToken === input.mediaSession && asset.kind === "video");
+  const slots = Math.min(MAX_AUTO_SOURCES, 6 - owned.length);
+  if (slots <= 0) throw new Error("편집 소스는 최대 6개까지 사용할 수 있어요.");
+  const existingPages = new Set(owned.map(asset => asset.source?.pageUrl).filter(Boolean));
+  const apiUrl = new URL("https://commons.wikimedia.org/w/api.php");
+  apiUrl.search = new URLSearchParams({
+    action: "query", format: "json", generator: "search", gsrsearch: `${input.person} filetype:video`,
+    gsrnamespace: "6", gsrlimit: "30", prop: "imageinfo", iiprop: "url|size|mime|timestamp|extmetadata",
+  }).toString();
+  const apiResponse = await fetch(apiUrl, {
+    headers: { "User-Agent": "editmatker/1.0 (Wikimedia Commons licensed video importer)" },
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (!apiResponse.ok) throw new Error("Wikimedia Commons에서 공개 영상을 찾지 못했어요. 잠시 후 다시 시도해 주세요.");
+  const payload = await apiResponse.json() as any;
+  if (payload?.error) throw new Error("Wikimedia Commons 검색에 실패했어요. 인물 이름을 바꿔 다시 시도해 주세요.");
+  const pages = Object.values(payload?.query?.pages ?? {}) as any[];
+  const candidates = pages.flatMap(page => {
+    const info = page?.imageinfo?.[0];
+    const fileTitle = plainMetadata(page?.title, 240);
+    const extension = path.extname(fileTitle).toLowerCase();
+    if (!info || ![".webm", ".ogv", ".mp4", ".mov"].includes(extension) || !Number.isFinite(Number(info.size)) || Number(info.size) <= 0 || Number(info.size) > MAX_AUTO_FILE_BYTES) return [];
+    if (!(String(info.mime ?? "").startsWith("video/") || info.mime === "application/ogg")) return [];
+    const license = allowedCommonsLicense(plainMetadata(info.extmetadata?.LicenseShortName?.value, 80));
+    if (!license) return [];
+    const artist = plainMetadata(info.extmetadata?.Artist?.value || info.extmetadata?.Credit?.value, 180);
+    if (!artist && license.label.startsWith("CC BY")) return [];
+    let originalUrl: string;
+    try {
+      const parsedUrl = new URL(info.url);
+      if (parsedUrl.protocol !== "https:" || parsedUrl.hostname !== "upload.wikimedia.org" || parsedUrl.port || parsedUrl.username || parsedUrl.password) return [];
+      originalUrl = parsedUrl.toString();
+    } catch { return []; }
+    const pageUrl = `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title).replace(/ /g, "_"))}`;
+    if (existingPages.has(pageUrl)) return [];
+    const uploadedAt = typeof info.timestamp === "string" && Number.isFinite(Date.parse(info.timestamp)) ? info.timestamp : null;
+    return [{ fileTitle, extension, size: Number(info.size), originalUrl, pageUrl, license, author: artist || "작자 미상", uploadedAt }];
+  }).sort((a, b) => (Date.parse(b.uploadedAt ?? "") || 0) - (Date.parse(a.uploadedAt ?? "") || 0));
+
+  const imported: Array<{ id: string; name: string; kind: "video"; durationSeconds: number; source: OpenMediaSource }> = [];
+  for (const candidate of candidates) {
+    if (imported.length >= slots) break;
+    let folder = "";
+    try {
+      const mediaResponse = await fetch(candidate.originalUrl, {
+        headers: { "User-Agent": "editmatker/1.0 (Wikimedia Commons licensed video importer)" },
+        redirect: "error", signal: AbortSignal.timeout(35_000),
+      });
+      if (!mediaResponse.ok) continue;
+      const finalUrl = new URL(mediaResponse.url);
+      if (finalUrl.hostname !== "upload.wikimedia.org" || finalUrl.protocol !== "https:" || finalUrl.port) continue;
+      const mime = mediaResponse.headers.get("content-type")?.split(";")[0] ?? "";
+      if (!(mime.startsWith("video/") || mime === "application/ogg" || mime === "application/octet-stream")) continue;
+      const bytes = await readLimitedBody(mediaResponse, MAX_AUTO_FILE_BYTES);
+      folder = await mkdtemp(path.join(tmpdir(), "editmatker-commons-"));
+      const filePath = path.join(folder, `source${candidate.extension}`);
+      await writeFile(filePath, bytes, { flag: "wx" });
+      const probe = await run(process.env.FFPROBE_PATH || "ffprobe", ["-v", "error", "-show_entries", "format=duration", "-of", "json", filePath], 15_000);
+      const duration = Number(JSON.parse(probe.stdout)?.format?.duration);
+      if (!Number.isFinite(duration) || duration <= 0 || duration > 1800) {
+        await rm(folder, { recursive: true, force: true });
+        folder = "";
+        continue;
+      }
+      const source: OpenMediaSource = {
+        provider: "Wikimedia Commons", fileTitle: candidate.fileTitle, author: candidate.author,
+        license: candidate.license.label, licenseUrl: candidate.license.licenseUrl,
+        pageUrl: candidate.pageUrl, originalUrl: candidate.originalUrl, uploadedAt: candidate.uploadedAt,
+      };
+      const id = randomUUID();
+      assets.set(id, { filePath, name: candidate.fileTitle.replace(/^File:/, ""), kind: "video", duration, createdAt: Date.now(), ownerToken: input.mediaSession, source });
+      imported.push({ id, name: candidate.fileTitle.replace(/^File:/, ""), kind: "video", durationSeconds: Math.floor(duration), source });
+    } catch {
+      if (folder) await rm(folder, { recursive: true, force: true }).catch(() => undefined);
+    }
+  }
+  return { assets: imported, maxSources: MAX_AUTO_SOURCES, maxFileBytes: MAX_AUTO_FILE_BYTES };
+}
+
 const draftInputSchema = z.object({
   mediaSession: z.string().min(32).max(128),
   person: z.string().trim().min(1).max(100),
@@ -128,8 +267,9 @@ export async function createEditDraft(input: z.infer<typeof draftInputSchema>) {
     id,
     fileName: asset!.name,
     durationSeconds: Math.floor(asset!.duration),
+    sourceLicense: asset!.source ? { provider: asset!.source.provider, license: asset!.source.license, author: asset!.source.author } : "user-uploaded",
   }));
-  const prompt = `사용자가 권리를 확인하고 업로드한 미디어만 사용해 세로형 팬 edit의 편집 타임라인을 설계하세요. 인물: ${input.person}. 분위기 지시: ${input.mood}. 목표 길이: ${input.durationSeconds}초. 사용 가능 소스(JSON): ${JSON.stringify(available)}. JSON 객체만 반환: {"title":string,"summary":string,"segments":[{"assetId":string,"startSeconds":number,"durationSeconds":number,"caption":string,"transition":"cut"|"fade"}]}. 2~6개 장면, 각 장면은 파일 길이를 넘지 않는 시작점과 1.5~6초의 컷 길이를 사용하세요. 캡션은 짧은 한국어 한 줄, 인물의 사생활/사실을 창작하지 마세요. 합계는 목표 길이에 가깝게 조정하고 assetId는 제공된 것만 사용하세요.`;
+  const prompt = `사용 가능한 소스 목록에 포함된 영상만 사용해 세로형 팬 edit의 편집 타임라인을 설계하세요. 인물: ${input.person}. 분위기 지시: ${input.mood}. 목표 길이: ${input.durationSeconds}초. 사용 가능 소스(JSON): ${JSON.stringify(available)}. JSON 객체만 반환: {"title":string,"summary":string,"segments":[{"assetId":string,"startSeconds":number,"durationSeconds":number,"caption":string,"transition":"cut"|"fade"}]}. 2~6개 장면, 각 장면은 파일 길이를 넘지 않는 시작점과 1.5~6초의 컷 길이를 사용하세요. 캡션은 짧은 한국어 한 줄, 인물의 사생활/사실을 창작하지 마세요. 합계는 목표 길이에 가깝게 조정하고 assetId는 제공된 것만 사용하세요.`;
   const response = await fetch(`${apiUrl}/v1/chat/completions`, {
     method: "POST",
     headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
@@ -137,7 +277,7 @@ export async function createEditDraft(input: z.infer<typeof draftInputSchema>) {
       model: "gpt-5-mini",
       temperature: 0.6,
       messages: [
-        { role: "system", content: "당신은 세심한 영상 편집자입니다. 사용자가 제공한 권리 확인 미디어의 메타데이터만 기반으로 컷 구성을 제안하세요. 출력은 JSON 객체 하나만 반환합니다." },
+        { role: "system", content: "당신은 세심한 영상 편집자입니다. 사용자가 확인한 공개 라이선스 자료 또는 사용자가 제공한 권리 확인 미디어의 메타데이터만 기반으로 컷 구성을 제안하세요. 인물의 사생활이나 확인되지 않은 사실을 만들지 말고, 출력은 JSON 객체 하나만 반환합니다." },
         { role: "user", content: prompt },
       ],
     }),
@@ -235,7 +375,8 @@ export function registerMediaRoutes(app: Express) {
         return res.status(400).json({ error: "편집에 필요한 원본 영상이 만료되었거나 컷 길이가 원본을 넘었어요." });
       }
       const totalDuration = selected.reduce((sum, item) => sum + item.segment.durationSeconds, 0);
-      if (totalDuration > 60) return res.status(400).json({ error: "한 번에 내보낼 수 있는 편집은 60초 이하여야 해요." });
+      const creditedSources = selected.map(item => item.asset?.source).filter((source): source is OpenMediaSource => Boolean(source)).filter((source, index, all) => all.findIndex(item => item.pageUrl === source.pageUrl) === index);
+      if (totalDuration + (creditedSources.length ? 5 : 0) > 60) return res.status(400).json({ error: creditedSources.length ? "출처 크레딧을 포함해 내보내는 영상은 60초 이하여야 해요." : "한 번에 내보낼 수 있는 편집은 60초 이하여야 해요." });
       const music = input.musicAssetId ? assets.get(input.musicAssetId) : undefined;
       if (input.musicAssetId && (music?.kind !== "audio" || music.ownerToken !== input.mediaSession)) return res.status(400).json({ error: "배경 음악 파일이 만료되었어요. 다시 올려 주세요." });
       workDir = await mkdtemp(path.join(tmpdir(), "editmatker-render-"));
@@ -258,14 +399,51 @@ export function registerMediaRoutes(app: Express) {
         await run(process.env.FFMPEG_PATH || "ffmpeg", args, 120_000);
         clipPaths.push(output);
       }
+      if (creditedSources.length) {
+        const wrapCreditLine = (line: string) => {
+          const rows: string[] = [];
+          let row = "";
+          let width = 0;
+          for (const char of Array.from(line)) {
+            if (char === "\n") {
+              rows.push(row);
+              row = "";
+              width = 0;
+              continue;
+            }
+            const charWidth = /[\u0000-\u00ff]/.test(char) ? 6 : 12;
+            if (row && width + charWidth > 420) {
+              rows.push(row);
+              row = "";
+              width = 0;
+            }
+            row += char;
+            width += charWidth;
+          }
+          if (row) rows.push(row);
+          return rows.join("\n");
+        };
+        const creditText = ["공개 영상 출처 · Wikimedia Commons", ...creditedSources.flatMap(source => [
+          `${source.fileTitle.replace(/^File:/, "").slice(0, 72)}\n${source.author.slice(0, 72)} · ${source.license}`,
+          `License: ${source.licenseUrl || "Public domain"}`,
+          `Source: ${source.pageUrl}`,
+        ].map(wrapCreditLine))].join("\n\n");
+        const creditPath = path.join(workDir, "credits.txt");
+        const creditVideo = path.join(workDir, "credits.mp4");
+        await writeFile(creditPath, creditText, "utf8");
+        const creditFilter = "drawtext=fontfile=/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc:textfile=" + creditPath + ":expansion=none:fontcolor=white:fontsize=12:line_spacing=8:box=1:boxcolor=black@0.35:boxborderw=18:x=28:y=(h-text_h)/2";
+        await run(process.env.FFMPEG_PATH || "ffmpeg", ["-y", "-f", "lavfi", "-i", "color=c=0x242521:s=540x960:r=30:d=5", "-vf", creditFilter, "-t", "5", "-an", "-c:v", "libx264", "-preset", "veryfast", "-crf", "24", "-pix_fmt", "yuv420p", creditVideo], 30_000);
+        clipPaths.push(creditVideo);
+      }
       const listPath = path.join(workDir, "clips.txt");
       await writeFile(listPath, clipPaths.map(file => `file '${file}'`).join("\n"), "utf8");
       const joinedPath = path.join(workDir, "joined.mp4");
       await run(process.env.FFMPEG_PATH || "ffmpeg", ["-y", "-f", "concat", "-safe", "0", "-i", listPath, "-c", "copy", "-movflags", "+faststart", joinedPath], 60_000);
       const outputPath = path.join(workDir, "editmatker-edit.mp4");
       if (music) {
-        const fadeStart = Math.max(0, totalDuration - 2);
-        await run(process.env.FFMPEG_PATH || "ffmpeg", ["-y", "-i", joinedPath, "-stream_loop", "-1", "-i", music.filePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", `volume=0.22,afade=t=out:st=${fadeStart}:d=${Math.min(2, totalDuration)}`, "-shortest", "-movflags", "+faststart", outputPath], 60_000);
+        const outputDuration = totalDuration + (creditedSources.length ? 5 : 0);
+        const fadeStart = Math.max(0, outputDuration - 2);
+        await run(process.env.FFMPEG_PATH || "ffmpeg", ["-y", "-i", joinedPath, "-stream_loop", "-1", "-i", music.filePath, "-map", "0:v:0", "-map", "1:a:0", "-c:v", "copy", "-af", `volume=0.22,afade=t=out:st=${fadeStart}:d=${Math.min(2, outputDuration)}`, "-shortest", "-movflags", "+faststart", outputPath], 60_000);
       } else {
         await writeFile(outputPath, await import("node:fs/promises").then(fs => fs.readFile(joinedPath)));
       }
@@ -277,10 +455,10 @@ export function registerMediaRoutes(app: Express) {
     } catch (error) {
       if (workDir) await rm(workDir, { recursive: true, force: true }).catch(() => undefined);
       console.error("Media render failed:", error instanceof Error ? error.message : "unknown error");
-      const message = error instanceof z.ZodError ? "편집 타임라인 형식이 올바르지 않아요." : "영상 렌더링에 실패했어요. 업로드한 파일을 확인한 뒤 다시 시도해 주세요.";
+      const message = error instanceof z.ZodError ? "편집 타임라인 형식이 올바르지 않아요." : "영상 렌더링에 실패했어요. 소스 파일을 확인한 뒤 다시 시도해 주세요.";
       if (!res.headersSent) return res.status(error instanceof z.ZodError ? 400 : 500).json({ error: message });
     }
   });
 }
 
-export const editmakerSchemas = { search: searchResultSchema, draft: draftInputSchema };
+export const editmakerSchemas = { search: searchResultSchema, autoSource: autoSourceInputSchema, draft: draftInputSchema };
