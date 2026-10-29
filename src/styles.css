@@ -86,7 +86,7 @@ input[type="range"] { accent-color: var(--accent); }
 .steps li.failed .dot { border-color: #e05050; background: #e05050; }
 .bar { height: 4px; background: var(--panel-2); border-radius: 4px; margin-top: 6px; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s linear; }
-.error { color: #ff8f7a; background: #ff5a3c18; border-radius: 10px; padding: 11px 13px; font-size: 13px; margin: 16px 0 0; line-height: 1.5; }
+.error { white-space: pre-line; color: #ff8f7a; background: #ff5a3c18; border-radius: 10px; padding: 11px 13px; font-size: 13px; margin: 16px 0 0; line-height: 1.5; }
 
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px transparent; } }
 @media (prefers-reduced-motion: reduce) { .steps li.active .dot { animation: none; } }

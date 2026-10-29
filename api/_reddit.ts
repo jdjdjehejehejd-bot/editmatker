@@ -49,6 +49,22 @@ export async function searchReddit(q: string, limit: number): Promise<Response> 
   return fetch(url, { headers: { "User-Agent": USER_AGENT, ...(bearer ? { Authorization: `Bearer ${bearer}` } : {}) } });
 }
 
+/**
+ * Reddit이 서버 IP를 막으면 PullPush(공개 Reddit 아카이브)에서 같은 검색을 하고,
+ * Reddit 검색 응답과 같은 모양({ data: { children: [{ data }] } })으로 바꿉니다.
+ */
+export async function searchPullPush(q: string, limit: number): Promise<unknown> {
+  const url = `https://api.pullpush.io/reddit/search/submission/?${new URLSearchParams({ q, size: String(Math.min(100, limit * 2)) })}`;
+  const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
+  if (!response.ok) throw new Error(`PullPush 응답 오류 (${response.status})`);
+  return toListing(await response.json());
+}
+
+export function toListing(data: any) {
+  const posts: any[] = Array.isArray(data?.data) ? data.data : [];
+  return { data: { children: posts.map(post => ({ data: post })) } };
+}
+
 export function json(status: number, body: unknown, extra: Record<string, string> = {}) {
   return new Response(JSON.stringify(body), { status, headers: { "Content-Type": "application/json; charset=utf-8", ...extra } });
 }
