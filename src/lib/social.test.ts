@@ -1,8 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { parseRedditSearch, parseYouTubeSearch, socialQuery, youtubeId } from "./social";
+import { afterEach, vi } from "vitest";
+import { parseRedditSearch, parseYouTubeSearch, searchYouTube, socialQueries, youtubeId } from "./social";
 import { rankSources, type TopicInfo } from "./sources";
 
 const helper = "http://localhost:8787";
+afterEach(() => vi.unstubAllGlobals());
+
 const topic: TopicInfo = { query: "손흥민", label: "손흥민", englishLabel: "Son Heung-min", description: null, commonsCategory: null, wikidataVideos: [] };
 
 describe("parseYouTubeSearch", () => {
@@ -64,9 +67,34 @@ describe("검색 보조", () => {
     expect(youtubeId("https://example.com/watch?v=abc")).toBeNull();
   });
 
-  it("YouTube는 입력한 언어로, Reddit은 영어 이름으로 검색한다", () => {
-    expect(socialQuery(topic, ["goal"], false)).toBe("손흥민 goal");
-    expect(socialQuery(topic, ["goal"], true)).toBe("Son Heung-min goal");
+  it("한국어와 영어 검색어를 모두 만든다", () => {
+    expect(socialQueries(topic, ["goal"])).toEqual(["손흥민", "Son Heung-min goal"]);
+    // 영어로 입력해도 Wikidata의 한국어 이름으로 함께 찾는다
+    expect(socialQueries({ ...topic, query: "Tokyo", label: "도쿄", englishLabel: "Tokyo" }, [])).toEqual(["도쿄", "Tokyo"]);
+    // 영어 이름을 모르면 한국어로만
+    expect(socialQueries({ ...topic, englishLabel: null }, ["goal"])).toEqual(["손흥민"]);
+    // 한국어 이름이 없으면 영어로만
+    expect(socialQueries({ ...topic, query: "Mars", label: "Mars", englishLabel: "Mars" }, [])).toEqual(["Mars"]);
+  });
+
+  it("두 언어 결과를 합치고 겹치는 영상은 한 번만 쓴다", async () => {
+    const calls: string[] = [];
+    vi.stubGlobal("fetch", async (url: string) => {
+      const q = new URL(url).searchParams.get("q")!;
+      calls.push(q);
+      const entries = q === "손흥민" ? [{ id: "ko1", title: "손흥민 골", duration: 60 }, { id: "both", title: "공통", duration: 60 }] : [{ id: "both", title: "Common", duration: 60 }, { id: "en1", title: "Son goal", duration: 60 }];
+      return Response.json({ entries });
+    });
+    const sources = await searchYouTube(topic, ["goal"], helper);
+    expect(calls.sort()).toEqual(["Son Heung-min goal", "손흥민"].sort());
+    expect(sources.map(s => s.id).sort()).toEqual(["youtube:both", "youtube:en1", "youtube:ko1"]);
+  });
+
+  it("한 언어 검색이 실패해도 다른 언어 결과를 쓴다", async () => {
+    vi.stubGlobal("fetch", async (url: string) =>
+      new URL(url).searchParams.get("q") === "손흥민" ? new Response("{}", { status: 502 }) : Response.json({ entries: [{ id: "en1", title: "Son goal", duration: 60 }] })
+    );
+    expect((await searchYouTube(topic, ["goal"], helper)).map(s => s.id)).toEqual(["youtube:en1"]);
   });
 
   it("YouTube·Reddit 영상이 Commons보다 앞에 온다", () => {
