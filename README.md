@@ -2,7 +2,7 @@
 
 **[▶ 앱 실행하기](https://editmatker.vercel.app)**
 
-주제와 특징만 적으면 YouTube·Reddit에서 관련 영상을 알아서 찾고, 하이라이트 장면만 뽑아 비트에 맞춰 편집한 에딧 영상을 만들어 줍니다. 편집과 렌더링은 모두 브라우저 안에서 이루어지고 API 키가 필요 없습니다. YouTube 영상을 쓰려면 내 컴퓨터에서 [로컬 도우미](#youtube-로컬-도우미)를 켜 두면 됩니다.
+주제와 특징만 적으면 YouTube·Reddit에서 관련 영상을 알아서 찾고, 하이라이트 장면만 뽑아 비트에 맞춰 편집한 에딧 영상을 만들어 줍니다. 편집과 렌더링은 모두 브라우저 안에서 이루어지고 API 키가 필요 없습니다. YouTube 영상을 쓰려면 내 컴퓨터에서 [로컬 도우미](#youtube-로컬-도우미-pc-전용)를 켜 두면 됩니다.
 
 ```
 주제: 아폴로 11호
@@ -42,7 +42,16 @@ pnpm build    # 타입 검사 + dist/ 정적 빌드
 
 Node.js 22+, pnpm 10+. 최신 Chrome · Edge · Firefox 데스크톱을 권장합니다(렌더링에 `MediaRecorder`, Web Audio 사용). 렌더링은 실시간으로 진행되므로 그동안 탭을 띄워 두세요.
 
-### YouTube 로컬 도우미
+### 휴대폰에서 쓰기
+
+https://editmatker.vercel.app 을 휴대폰 브라우저로 열면 바로 됩니다. 휴대폰에서는 로컬 도우미를 실행할 수 없으므로 **YouTube 없이** Reddit · Wikimedia Commons · Internet Archive에서 영상을 찾습니다.
+
+- Reddit은 휴대폰 브라우저에서 직접 검색하고, 막히면 Vercel 함수(`api/reddit.ts`, `api/media.ts`)를 거쳐 다시 시도합니다.
+- 작업하는 동안 화면이 꺼지지 않게 하고, 끝나면 **공유 · 사진에 저장** 버튼으로 사진 앱이나 SNS로 바로 보낼 수 있습니다.
+- 메모리를 아끼려고 영상 수(최대 4개)와 파일 크기(60MB)를 줄여서 씁니다. 렌더링은 실시간이니 끝날 때까지 화면을 켜 두세요.
+- Vercel에서 Reddit 검색이 자주 막히면 [Reddit 앱](https://www.reddit.com/prefs/apps)(script 유형)을 만들고 Vercel 프로젝트 **Settings → Environment Variables**에 `REDDIT_CLIENT_ID`, `REDDIT_CLIENT_SECRET`을 넣으세요. 그러면 공식 API로 검색합니다.
+
+### YouTube 로컬 도우미 (PC 전용)
 
 브라우저는 보안 정책(CORS) 때문에 YouTube 영상 파일을 직접 받을 수 없습니다. 그래서 내 컴퓨터에서 작은 도우미 서버를 켜면, 도우미가 [yt-dlp](https://github.com/yt-dlp/yt-dlp)로 영상을 받아 웹앱에 넘겨 줍니다. 도우미가 없으면 YouTube 없이 Reddit 영상(소리 없는 파일)과 Commons·Internet Archive만 씁니다.
 
@@ -70,6 +79,8 @@ Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배�
 - `src/lib/style.ts` — 특징 문장 → 무드·BPM·색감·효과·검색 힌트
 - `src/lib/sources.ts` — Wikidata 주제 해석, Commons · Internet Archive 검색, 라이선스 판정, 출처 통합·정렬, 다운로드
 - `src/lib/social.ts` — YouTube · Reddit 검색과 로컬 도우미 연결
+- `src/lib/device.ts` — 휴대폰 한도, iOS 오디오 잠금 해제, 화면 켜짐 유지, 공유
+- `api/reddit.ts`, `api/media.ts` — Reddit 검색·영상 프록시 (Vercel 함수)
 - `helper/server.mjs` — yt-dlp로 YouTube · Reddit 영상을 받아 주는 로컬 도우미
 - `src/lib/analyze.ts` — 브라우저에서 프레임·오디오 측정
 - `src/lib/highlights.ts` — 점수 계산과 하이라이트 구간 선택

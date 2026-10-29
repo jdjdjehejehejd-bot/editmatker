@@ -48,6 +48,8 @@ export interface RenderOptions {
   subtitle: string;
   credits: string[];
   music: { buffer: AudioBuffer; offset: number };
+  /** 미리 깨워 둔 AudioContext (iOS는 버튼을 누를 때 만든 것만 소리가 남) */
+  audio?: AudioContext;
   onProgress: (ratio: number) => void;
   signal?: AbortSignal;
 }
@@ -138,7 +140,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   for (let i = 0; i < POOL_SIZE - 1; i++) prepare(i);
   await Promise.all(prepared.slice(0, POOL_SIZE - 1));
 
-  const audio = new AudioContext();
+  const audio = options.audio ?? new AudioContext();
   await audio.resume().catch(() => undefined);
   const destination = audio.createMediaStreamDestination();
   const musicSource = audio.createBufferSource();
@@ -160,6 +162,9 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   ctx.fillRect(0, 0, W, H);
   recorder.start(500);
   const t0 = audio.currentTime + 0.15;
+  // 오디오가 끝내 깨어나지 않으면(일부 모바일 브라우저) 시계가 멈추므로 실제 시간으로 대신 잽니다.
+  const wallStart = performance.now() + 150;
+  const clock = () => (audio.state === "running" ? audio.currentTime - t0 : (performance.now() - wallStart) / 1000);
   musicSource.start(t0, options.music.offset);
   // 음악이 편집보다 길면 크레딧 끝에서 페이드아웃
   musicGain.gain.setValueAtTime(1, t0 + total - 2);
@@ -311,7 +316,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
         reject(new DOMException("Aborted", "AbortError"));
         return;
       }
-      const now = audio.currentTime - t0;
+      const now = clock();
       if (now >= total) return resolve();
       if (now >= 0) {
         if (now < plan.duration) {

@@ -20,6 +20,8 @@ export interface SourceVideo {
   reusable: boolean;
   pageUrl: string;
   mediaUrl: string;
+  /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
+  fallbackUrl?: string;
   poster: string | null;
   duration: number | null;
   bytes: number | null;
@@ -355,15 +357,31 @@ export function rankSources(sources: SourceVideo[], topic: TopicInfo): SourceVid
 export async function downloadSource(
   source: SourceVideo,
   onProgress: (ratio: number) => void,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  maxBytes = MAX_SOURCE_BYTES
 ): Promise<Blob> {
-  const response = await fetch(source.mediaUrl, { signal });
+  try {
+    return await downloadFrom(source.mediaUrl, source.bytes, onProgress, signal, maxBytes);
+  } catch (error) {
+    if (signal?.aborted || !source.fallbackUrl) throw error;
+    return downloadFrom(source.fallbackUrl, source.bytes, onProgress, signal, maxBytes);
+  }
+}
+
+async function downloadFrom(
+  url: string,
+  expectedBytes: number | null,
+  onProgress: (ratio: number) => void,
+  signal: AbortSignal | undefined,
+  maxBytes: number
+): Promise<Blob> {
+  const response = await fetch(url, { signal });
   if (!response.ok || !response.body) {
     const detail = (await response.json().catch(() => null))?.error;
     throw new Error(detail ? `다운로드 실패: ${detail}` : `다운로드 실패 (${response.status})`);
   }
-  const total = Number(response.headers.get("content-length")) || source.bytes || 0;
-  if (total > MAX_SOURCE_BYTES) throw new Error("파일이 너무 커서 건너뛰었어요.");
+  const total = Number(response.headers.get("content-length")) || expectedBytes || 0;
+  if (total > maxBytes) throw new Error("파일이 너무 커서 건너뛰었어요.");
   const reader = response.body.getReader();
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let received = 0;
@@ -371,7 +389,7 @@ export async function downloadSource(
     const { done, value } = await reader.read();
     if (done) break;
     received += value.byteLength;
-    if (received > MAX_SOURCE_BYTES) {
+    if (received > maxBytes) {
       await reader.cancel();
       throw new Error("파일이 너무 커서 건너뛰었어요.");
     }

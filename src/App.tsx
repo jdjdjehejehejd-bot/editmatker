@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { runPipeline, type LoadedSource, type PipelineResult, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
+import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
@@ -30,7 +31,7 @@ export default function App() {
   const [features, setFeatures] = useState("");
   const [seconds, setSeconds] = useState(30);
   const [aspect, setAspect] = useState<Aspect>("9:16");
-  const [sourceCount, setSourceCount] = useState(4);
+  const [sourceCount, setSourceCount] = useState(LIMITS.defaultSources);
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
 
@@ -41,9 +42,10 @@ export default function App() {
   const [loaded, setLoaded] = useState<LoadedSource[]>([]);
   const [skipped, setSkipped] = useState<{ title: string; reason: string }[]>([]);
   const [result, setResult] = useState<PipelineResult | null>(null);
-  const [output, setOutput] = useState<{ url: string; ext: string } | null>(null);
+  const [output, setOutput] = useState<{ url: string; ext: string; file: File } | null>(null);
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const preview = useMemo(() => parseStyle(features), [features]);
   const [width, height] = ASPECT_SIZE[aspect];
@@ -82,10 +84,14 @@ export default function App() {
     reset();
     const controller = new AbortController();
     abortRef.current = controller;
+    // 버튼을 누른 이 순간에 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
+    const audio = unlockAudio();
+    const releaseScreen = await keepScreenOn();
     setStatus("running");
+    stageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
-      const currentHelper = rememberedHelper() ? await connectHelper() : helper;
+      const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
         { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
@@ -107,12 +113,16 @@ export default function App() {
         subtitle: pipeline.style.label,
         credits: pipeline.credits,
         music: pipeline.music,
+        audio,
         signal: controller.signal,
         onProgress: ratio => setStep({ id: "render", detail: "실시간으로 렌더링하는 중 — 탭을 닫거나 숨기지 마세요", ratio }),
       });
-      setOutput({ url: URL.createObjectURL(rendered.blob), ext: rendered.mimeType.includes("mp4") ? "mp4" : "webm" });
+      const ext = rendered.mimeType.includes("mp4") ? "mp4" : "webm";
+      const file = new File([rendered.blob], `${slug(topic)}-edit.${ext}`, { type: rendered.blob.type });
+      setOutput({ url: URL.createObjectURL(rendered.blob), ext, file });
       setStatus("done");
     } catch (e) {
+      void audio.close().catch(() => undefined);
       if (controller.signal.aborted) {
         setStatus("idle");
         setStep(null);
@@ -120,6 +130,17 @@ export default function App() {
       }
       setError(e instanceof Error ? e.message : "알 수 없는 오류가 발생했어요.");
       setStatus("error");
+    } finally {
+      releaseScreen();
+    }
+  };
+
+  const share = async () => {
+    if (!output) return;
+    try {
+      await navigator.share({ files: [output.file], title: `${topic} edit` });
+    } catch {
+      /* 사용자가 공유를 취소함 */
     }
   };
 
@@ -210,7 +231,7 @@ export default function App() {
           <div className="row">
             <label className="field">
               <span>사용할 영상 수 · {sourceCount}개</span>
-              <input type="range" min={2} max={6} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} />
+              <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} />
             </label>
             <label className="field">
               <span>배경음악</span>
@@ -231,12 +252,18 @@ export default function App() {
             />
             <small className="hint">
               {licenseMode === "any"
-                ? "YouTube·Reddit 위주로 라이선스와 관계없이 찾습니다. 결과물을 공개적으로 올리려면 원작자 허락이 필요할 수 있어요."
+                ? `${isMobile ? "Reddit" : "YouTube·Reddit"} 위주로 라이선스와 관계없이 찾습니다. 결과물을 공개적으로 올리려면 원작자 허락이 필요할 수 있어요.`
                 : "Wikimedia Commons·Internet Archive의 Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 결과물을 자유롭게 공유할 수 있어요."}
             </small>
           </div>
 
-          {licenseMode === "any" && (
+          {licenseMode === "any" && isMobile && !helper.ytDlp && (
+            <div className="helper">
+              <b>📱 휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive에서 영상을 찾아요. YouTube 영상은 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
+            </div>
+          )}
+
+          {licenseMode === "any" && !isMobile && (
             <div className={`helper ${helper.ytDlp ? "on" : ""}`}>
               {helper.ytDlp ? (
                 <>
@@ -249,7 +276,7 @@ export default function App() {
               ) : (
                 <>
                   <b>○ YouTube 꺼짐</b> 지금은 Reddit 영상만 찾아요. YouTube까지 쓰려면 내 컴퓨터에서 로컬 도우미(<code>pnpm helper</code>)를 켠 뒤 연결하세요.{" "}
-                  <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미" target="_blank" rel="noreferrer">
+                  <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미-pc-전용" target="_blank" rel="noreferrer">
                     방법 보기
                   </a>
                   <button type="button" className="chip connect" onClick={connectHelper} disabled={checkingHelper}>
@@ -290,7 +317,7 @@ export default function App() {
           {error && <p className="error">{error}</p>}
         </section>
 
-        <section className="panel stage">
+        <section className="panel stage" ref={stageRef}>
           <div className="screen" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(72vh * ${width / height}))` }}>
             <canvas ref={canvasRef} width={width} height={height} hidden={Boolean(output)} />
             {output && <video src={output.url} controls autoPlay loop playsInline />}
@@ -303,9 +330,15 @@ export default function App() {
           </div>
           {output && (
             <div className="actions">
-              <a className="primary" href={output.url} download={`${slug(topic)}-edit.${output.ext}`}>
-                영상 저장 (.{output.ext})
-              </a>
+              {canShareFile(output.file) ? (
+                <button type="button" className="primary" onClick={share}>
+                  공유 · 사진에 저장
+                </button>
+              ) : (
+                <a className="primary" href={output.url} download={output.file.name}>
+                  영상 저장 (.{output.ext})
+                </a>
+              )}
               <button type="button" className="ghost" onClick={downloadPlan}>
                 편집 계획 JSON
               </button>

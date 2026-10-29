@@ -1,6 +1,7 @@
 // 주제 → 영상 검색 → 다운로드 → 하이라이트 분석 → 편집 계획까지의 전체 흐름입니다.
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
+import { LIMITS } from "./device";
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
@@ -71,11 +72,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     if (signal.aborted) throw new DOMException("Aborted", "AbortError");
     try {
       events.step("download", `${loaded.length + 1}/${input.sourceCount} · ${candidate.title}`, 0);
-      const blob = await downloadSource(candidate, ratio => events.step("download", `${loaded.length + 1}/${input.sourceCount} · ${candidate.title}`, ratio), signal);
+      const blob = await downloadSource(candidate, ratio => events.step("download", `${loaded.length + 1}/${input.sourceCount} · ${candidate.title}`, ratio), signal, LIMITS.sourceBytes);
       const url = URL.createObjectURL(blob);
       try {
         events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
-        const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal);
+        const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
         const scores = scoreSamples(analysis.samples, style.weights);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
         const perSource = Math.ceil(approxCuts / input.sourceCount) + 2;

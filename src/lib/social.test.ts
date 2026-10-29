@@ -52,6 +52,7 @@ describe("parseRedditSearch", () => {
     const sources = parseRedditSearch(data, null);
     expect(sources.map(s => s.id)).toEqual(["reddit:t3_a"]);
     expect(sources[0].mediaUrl).toBe("https://v.redd.it/a/DASH_480.mp4");
+    expect(sources[0].fallbackUrl).toBe(`https://editmatker.vercel.app/api/media?url=${encodeURIComponent("https://v.redd.it/a/DASH_480.mp4")}`);
   });
 });
 
