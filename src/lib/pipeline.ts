@@ -5,7 +5,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { downloadSource, findSources, resolveTopic, type SourceVideo, type TopicInfo } from "./sources";
+import { downloadSource, findSources, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
 export type StepId = "topic" | "search" | "download" | "analyze" | "plan" | "render";
@@ -21,6 +21,7 @@ export interface PipelineInput {
   topic: string;
   features: string;
   seconds: number;
+  licenseMode: LicenseMode;
   sourceCount: number;
   musicFile: File | null;
 }
@@ -48,10 +49,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const topic = await resolveTopic(input.topic, signal);
 
   events.step("search", `${topic.englishLabel ?? topic.label} 관련 공개 영상을 찾는 중`);
-  const candidates = await findSources(topic, style.searchHints, signal);
+  const candidates = await findSources(topic, style.searchHints, input.licenseMode, signal);
   events.candidates(candidates);
   if (!candidates.length) {
-    throw new Error("재사용 가능한 라이선스의 관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.");
+    const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
+    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.`);
   }
 
   // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다.
