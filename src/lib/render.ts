@@ -1,6 +1,6 @@
 // 편집 계획을 캔버스에 실시간으로 그리고 MediaRecorder로 영상 파일을 만듭니다.
 
-import { seek } from "./analyze";
+import { createHiddenVideo, disposeVideo, seek } from "./analyze";
 import type { EditPlan, Segment } from "./plan";
 import type { EditStyle, Grade } from "./style";
 
@@ -110,13 +110,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   const font = `"Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif`;
 
   // 재생기 풀: 지금 컷이 재생되는 동안 다음 컷들을 미리 찾아 둡니다.
-  const pool = Array.from({ length: POOL_SIZE }, () => {
-    const v = document.createElement("video");
-    v.muted = true;
-    v.playsInline = true;
-    v.preload = "auto";
-    return v;
-  });
+  const pool = Array.from({ length: POOL_SIZE }, createHiddenVideo);
   const prepared: Promise<void>[] = [];
   const prepare = (index: number) => {
     const seg = plan.segments[index];
@@ -349,11 +343,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       /* 이미 멈춤 */
     }
     if (recorder.state !== "inactive") recorder.stop();
-    pool.forEach(v => {
-      v.pause();
-      v.removeAttribute("src");
-      v.load();
-    });
+    pool.forEach(disposeVideo);
   });
 
   await stopped;
