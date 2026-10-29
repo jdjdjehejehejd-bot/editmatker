@@ -1,6 +1,6 @@
 # editmatker — 자동 하이라이트 에딧 메이커
 
-**[▶ 앱 실행하기](https://jdjdjehejehejd-bot.github.io/editmatker/)**
+**[▶ 앱 실행하기](https://editmatker.vercel.app)**
 
 주제와 특징만 적으면 관련 영상을 알아서 찾고, 하이라이트 장면만 뽑아 비트에 맞춰 편집한 에딧 영상을 만들어 줍니다. 서버나 API 키 없이 모든 처리가 브라우저 안에서 이루어집니다.
 
@@ -42,7 +42,7 @@ Node.js 22+, pnpm 10+. 최신 Chrome · Edge · Firefox 데스크톱을 권장�
 
 ### 배포
 
-`main` 브랜치에 푸시하면 `.github/workflows/pages.yml`이 테스트·빌드 후 GitHub Pages에 배포합니다. 처음 한 번은 저장소 **Settings → Pages → Build and deployment → Source**를 **GitHub Actions**로 설정해야 합니다. 비공개 저장소의 Pages는 GitHub 유료 플랜이 필요합니다.
+Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배포됩니다(다른 브랜치·PR은 미리보기 배포). Vercel이 Vite 프로젝트를 자동 인식하므로 별도 설정 없이 `pnpm build` 결과물인 `dist/`를 그대로 올립니다.
 
 ### 구조
 
