@@ -15,11 +15,6 @@ coverage/
 package-lock.json
 pnpm-lock.yaml
 
-# Database
-*.db
-*.sqlite
-*.sqlite3
-
 # Logs
 *.log
 
