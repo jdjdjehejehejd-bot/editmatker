@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildCommonsQueries, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, type TopicInfo } from "./sources";
+import { buildArchiveQuery, buildCommonsQueries, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
 
 const canPlayWebm = (mime: string) => mime.includes("webm");
 
@@ -19,6 +19,16 @@ describe("normalizeLicense", () => {
     expect(normalizeLicense("", "http://creativecommons.org/licenses/by-nc-sa/3.0/")).toBeNull();
     expect(normalizeLicense("GFDL")).toBeNull();
     expect(normalizeLicense("CC BY")).toBeNull();
+  });
+});
+
+describe("resolveLicense", () => {
+  it("재사용 모드는 허용 목록만, 전체 모드는 무엇이든 통과시킨다", () => {
+    expect(resolveLicense("CC BY-ND 4.0", null, "reusable")).toBeNull();
+    expect(resolveLicense("CC BY-ND 4.0", null, "any")).toEqual({ label: "CC BY-ND 4.0", licenseUrl: null, reusable: false });
+    expect(resolveLicense("", null, "any")?.label).toBe("라이선스 미표기");
+    expect(resolveLicense("", "https://creativecommons.org/licenses/by-nc/3.0/", "any")?.label).toBe("CC BY-NC 3.0");
+    expect(resolveLicense("CC0", null, "any")?.reusable).toBe(true);
   });
 });
 
@@ -47,7 +57,7 @@ describe("parseCommonsPage", () => {
   };
 
   it("재생 가능한 480p 변환본과 메타데이터를 고른다", () => {
-    const source = parseCommonsPage(page, 1, canPlayWebm)!;
+    const source = parseCommonsPage(page, 1, "reusable", canPlayWebm)!;
     expect(source.mediaUrl).toBe("https://upload.wikimedia.org/480p.webm");
     expect(source.author).toBe("NASA");
     expect(source.title).toBe("Apollo 11 launch");
@@ -57,10 +67,19 @@ describe("parseCommonsPage", () => {
   it("다른 호스트나 허용되지 않은 라이선스는 거부한다", () => {
     const badHost = structuredClone(page);
     badHost.videoinfo[0].derivatives = [{ src: "https://evil.example/a.webm", type: "video/webm", height: 480, bandwidth: 1 }];
-    expect(parseCommonsPage(badHost, 1, canPlayWebm)).toBeNull();
+    expect(parseCommonsPage(badHost, 1, "any", canPlayWebm)).toBeNull();
     const nc = structuredClone(page);
     nc.videoinfo[0].extmetadata.LicenseShortName.value = "CC BY-NC 2.0";
-    expect(parseCommonsPage(nc, 1, canPlayWebm)).toBeNull();
+    expect(parseCommonsPage(nc, 1, "reusable", canPlayWebm)).toBeNull();
+  });
+
+  it("모든 공개 영상 모드에서는 NC 영상도 표시해서 쓴다", () => {
+    const nc = structuredClone(page);
+    nc.videoinfo[0].extmetadata.LicenseShortName.value = "CC BY-NC 2.0";
+    const source = parseCommonsPage(nc, 1, "any", canPlayWebm)!;
+    expect(source.license).toBe("CC BY-NC 2.0");
+    expect(source.reusable).toBe(false);
+    expect(parseCommonsPage(page, 1, "any", canPlayWebm)!.reusable).toBe(true);
   });
 });
 
@@ -71,6 +90,12 @@ describe("검색 보조", () => {
     const queries = buildCommonsQueries(topic, ["launch"]);
     expect(queries[0]).toBe('filetype:video incategory:"Apollo 11"');
     expect(queries).toContain('filetype:video "Apollo 11" launch');
+  });
+
+  it("Internet Archive 검색은 모드에 따라 라이선스 조건을 붙인다", () => {
+    expect(buildArchiveQuery(topic, [], "reusable")).toContain("licenseurl:");
+    expect(buildArchiveQuery(topic, [], "any")).not.toContain("licenseurl:");
+    expect(buildArchiveQuery(topic, [], "any")).toContain("NOT collection:(inlibrary");
   });
 
   it("작은 mp4 파일을 고른다", () => {
@@ -84,7 +109,7 @@ describe("검색 보조", () => {
   });
 
   it("제목에 주제가 들어간 영상을 우선한다", () => {
-    const base = { provider: "Wikimedia Commons" as const, author: "", license: "CC0 1.0", licenseUrl: null, pageUrl: "", mediaUrl: "", poster: null, bytes: null };
+    const base = { provider: "Wikimedia Commons" as const, author: "", license: "CC0 1.0", licenseUrl: null, reusable: true, pageUrl: "", mediaUrl: "", poster: null, bytes: null };
     const ranked = rankSources(
       [
         { ...base, id: "a", title: "Random rocket", duration: 60, relevance: 1 },

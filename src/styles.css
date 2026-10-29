@@ -59,6 +59,8 @@ input[type="range"] { accent-color: var(--accent); }
 
 .file { display: flex; flex-direction: column; gap: 4px; }
 .file input { font-size: 12px; max-width: 100%; }
+.hint { color: var(--muted); font-size: 11px; line-height: 1.5; }
+.badge { display: inline-block; margin-left: 6px; font-style: normal; color: #f2c94b; border: 1px solid #f2c94b55; border-radius: 5px; padding: 0 5px; font-size: 10px; }
 .file small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .primary { display: inline-flex; justify-content: center; align-items: center; width: 100%; border: 0; border-radius: 11px; background: var(--accent); color: #1b0e0a; font-weight: 800; padding: 14px; font-size: 15px; text-decoration: none; transition: transform 0.12s, filter 0.12s; }

@@ -1,8 +1,12 @@
-// 주제를 해석해 재사용 가능한 라이선스의 관련 영상을 찾습니다.
+// 주제를 해석해 관련 영상을 찾습니다. 기본은 라이선스와 관계없이 공개된 영상 전체이고,
+// 원하면 2차 편집이 허용되는 라이선스만으로 좁힐 수 있습니다.
 // 모든 요청은 CORS를 허용하는 공개 API(Wikidata, Wikimedia Commons, Internet Archive)로
 // 브라우저에서 직접 보내므로 서버나 API 키가 필요 없습니다.
 
 export type Provider = "Wikimedia Commons" | "Internet Archive";
+
+/** reusable: 재사용 가능한 라이선스만, any: 라이선스와 관계없이 공개된 영상 전체 */
+export type LicenseMode = "reusable" | "any";
 
 export interface SourceVideo {
   id: string;
@@ -11,6 +15,8 @@ export interface SourceVideo {
   author: string;
   license: string;
   licenseUrl: string | null;
+  /** 2차 편집이 허용되는 라이선스(Public domain, CC0, CC BY, CC BY-SA)인지 */
+  reusable: boolean;
   pageUrl: string;
   mediaUrl: string;
   poster: string | null;
@@ -110,6 +116,19 @@ export function normalizeLicense(label: string, url?: string | null): { label: s
   };
 }
 
+/** 라이선스 모드에 따라 영상의 라이선스를 판정합니다. 쓸 수 없으면 null. */
+export function resolveLicense(label: string, url: string | null, mode: LicenseMode): { label: string; licenseUrl: string | null; reusable: boolean } | null {
+  const reusable = normalizeLicense(label, url);
+  if (reusable) return { ...reusable, reusable: true };
+  if (mode === "reusable") return null;
+  return { label: label || (url ? licenseNameFromUrl(url) : "") || "라이선스 미표기", licenseUrl: url, reusable: false };
+}
+
+function licenseNameFromUrl(url: string): string {
+  const match = /creativecommons\.org\/licenses\/([a-z-]+)\/(\d\.\d)/i.exec(url);
+  return match ? `CC ${match[1].toUpperCase()} ${match[2]}` : "";
+}
+
 export function plainText(value: unknown, max = 200): string {
   if (typeof value !== "string") return "";
   return value
@@ -154,16 +173,17 @@ function isUploadHost(url: string) {
   }
 }
 
-export function parseCommonsPage(page: any, relevance: number, canPlay: CanPlay = defaultCanPlay): SourceVideo | null {
+export function parseCommonsPage(page: any, relevance: number, mode: LicenseMode = "reusable", canPlay: CanPlay = defaultCanPlay): SourceVideo | null {
   const info = page?.videoinfo?.[0] ?? page?.imageinfo?.[0];
   if (!info || info.mediatype !== "VIDEO") return null;
   const duration = Number(info.duration) || null;
   if (duration !== null && (duration < MIN_DURATION || duration > MAX_DURATION)) return null;
   const meta = info.extmetadata ?? {};
-  const license = normalizeLicense(plainText(meta.LicenseShortName?.value, 80), plainText(meta.LicenseUrl?.value, 200) || null);
+  const license = resolveLicense(plainText(meta.LicenseShortName?.value, 80), plainText(meta.LicenseUrl?.value, 200) || null, mode);
   if (!license) return null;
   const author = plainText(meta.Artist?.value || meta.Credit?.value, 120);
-  if (!author && license.label.startsWith("CC BY")) return null;
+  // 저작자 표시가 필요한 라이선스인데 작성자를 알 수 없으면 재사용 모드에서는 제외합니다.
+  if (!author && license.label.startsWith("CC BY") && mode === "reusable") return null;
   const media = pickCommonsMedia(info, canPlay);
   if (!media) return null;
   const title = plainText(page.title, 200).replace(/^File:/, "");
@@ -174,6 +194,7 @@ export function parseCommonsPage(page: any, relevance: number, canPlay: CanPlay 
     author: author || "작성자 표기 없음",
     license: license.label,
     licenseUrl: license.licenseUrl,
+    reusable: license.reusable,
     pageUrl: typeof info.descriptionurl === "string" ? info.descriptionurl : `https://commons.wikimedia.org/wiki/${encodeURIComponent(String(page.title))}`,
     mediaUrl: media.url,
     poster: typeof info.thumburl === "string" ? info.thumburl : null,
@@ -207,12 +228,12 @@ export function buildCommonsQueries(topic: TopicInfo, hints: string[]): string[]
   return [...new Set(queries)];
 }
 
-export async function searchCommons(topic: TopicInfo, hints: string[], signal?: AbortSignal): Promise<SourceVideo[]> {
+export async function searchCommons(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
   const found = new Map<string, SourceVideo>();
   const add = (pages: any[], base: number) => {
     for (const page of pages) {
       const rank = Number(page?.index) || 1;
-      const source = parseCommonsPage(page, base - rank * 0.01);
+      const source = parseCommonsPage(page, base - rank * 0.01, mode);
       if (source && !found.has(source.id)) found.set(source.id, source);
     }
   };
@@ -248,10 +269,18 @@ function parseLength(value: unknown): number | null {
   return Number(text) || null;
 }
 
-export async function searchArchive(topic: TopicInfo, hints: string[], signal?: AbortSignal, limit = 6): Promise<SourceVideo[]> {
+export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: LicenseMode): string {
   const name = topic.englishLabel ?? topic.query;
   const terms = [`"${name.replace(/"/g, "")}"`, ...hints].join(" ");
-  const q = `(${terms}) AND mediatype:(movies) AND licenseurl:(*creativecommons.org/licenses/by/* OR *creativecommons.org/licenses/by-sa/* OR *publicdomain*)`;
+  // 대출 전용(내려받기 불가) 컬렉션은 처음부터 뺍니다.
+  const base = `(${terms}) AND mediatype:(movies) AND NOT collection:(inlibrary OR printdisabled)`;
+  if (mode === "any") return base;
+  return `${base} AND licenseurl:(*creativecommons.org/licenses/by/* OR *creativecommons.org/licenses/by-sa/* OR *publicdomain*)`;
+}
+
+export async function searchArchive(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
+  const limit = mode === "any" ? 10 : 6;
+  const q = buildArchiveQuery(topic, hints, mode);
   const url = new URL("https://archive.org/advancedsearch.php");
   url.search = new URLSearchParams({ q, rows: String(limit), output: "json", sort: "downloads desc" }).toString();
   for (const field of ["identifier", "title", "creator", "licenseurl"]) url.searchParams.append("fl[]", field);
@@ -259,9 +288,10 @@ export async function searchArchive(topic: TopicInfo, hints: string[], signal?: 
   const docs: any[] = data?.response?.docs ?? [];
   const sources = await Promise.all(
     docs.map(async (doc, index): Promise<SourceVideo | null> => {
-      const license = normalizeLicense("", typeof doc.licenseurl === "string" ? doc.licenseurl : null);
+      const license = resolveLicense("", typeof doc.licenseurl === "string" ? doc.licenseurl : null, mode);
       if (!license || typeof doc.identifier !== "string") return null;
       const meta = await getJson(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`, signal).catch(() => null);
+      if (meta?.is_dark || meta?.metadata?.["access-restricted-item"] === "true") return null;
       const file = pickArchiveFile(meta?.files ?? []);
       if (!file) return null;
       const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator;
@@ -272,6 +302,7 @@ export async function searchArchive(topic: TopicInfo, hints: string[], signal?: 
         author: plainText(creator, 120) || "작성자 표기 없음",
         license: license.label,
         licenseUrl: license.licenseUrl,
+        reusable: license.reusable,
         pageUrl: `https://archive.org/details/${encodeURIComponent(doc.identifier)}`,
         mediaUrl: `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${file.name.split("/").map(encodeURIComponent).join("/")}`,
         poster: `https://archive.org/services/img/${encodeURIComponent(doc.identifier)}`,
@@ -285,13 +316,13 @@ export async function searchArchive(topic: TopicInfo, hints: string[], signal?: 
 }
 
 /** 두 저장소를 함께 검색하고 관련도 순으로 정렬합니다. */
-export async function findSources(topic: TopicInfo, hints: string[], signal?: AbortSignal): Promise<SourceVideo[]> {
+export async function findSources(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal): Promise<SourceVideo[]> {
   const [commons, archive] = await Promise.all([
-    searchCommons(topic, hints, signal).catch(error => {
+    searchCommons(topic, hints, mode, signal).catch(error => {
       if (signal?.aborted) throw error;
       return [] as SourceVideo[];
     }),
-    searchArchive(topic, hints, signal).catch(error => {
+    searchArchive(topic, hints, mode, signal).catch(error => {
       if (signal?.aborted) throw error;
       return [] as SourceVideo[];
     }),
