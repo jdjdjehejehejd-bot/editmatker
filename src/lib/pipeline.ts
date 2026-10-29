@@ -6,6 +6,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
+import { socialQueries } from "./social";
 import { downloadSource, findSources, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
@@ -52,7 +53,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const topic = await resolveTopic(input.topic, signal);
 
   const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
-  events.step("search", `${where}에서 ${topic.label} 영상을 찾는 중`);
+  const queries = input.licenseMode === "any" ? socialQueries(topic, style.searchHints) : [topic.englishLabel ?? topic.label];
+  events.step("search", `${where}에서 찾는 중 · ${queries.map(q => `"${q}"`).join(", ")}`);
   const candidates = await findSources(topic, style.searchHints, input.licenseMode, input.helper, signal);
   events.candidates(candidates);
   if (!candidates.length) {

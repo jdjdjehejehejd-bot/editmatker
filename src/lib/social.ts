@@ -144,16 +144,44 @@ export function parseRedditSearch(data: any, helper: string | null): SourceVideo
   return sources;
 }
 
-export function socialQuery(topic: TopicInfo, hints: string[], preferEnglish: boolean) {
-  const name = preferEnglish ? topic.englishLabel ?? topic.query : topic.query;
-  return [name, ...hints].join(" ").trim();
+const HANGUL = /[\uac00-\ud7a3]/;
+
+/**
+ * 한국어와 영어로 각각 검색할 검색어를 만듭니다.
+ * 한국어 이름은 그대로, 영어 이름(Wikidata)에는 특징에서 뽑은 영어 키워드를 붙입니다.
+ */
+export function socialQueries(topic: TopicInfo, hints: string[]): string[] {
+  const korean = [topic.query, topic.label].find(name => HANGUL.test(name));
+  const english = topic.englishLabel ?? (HANGUL.test(topic.query) ? null : topic.query);
+  const queries = [korean, english ? [english, ...hints].join(" ") : null].filter((q): q is string => Boolean(q?.trim()));
+  return [...new Set(queries.map(q => q.trim()))];
+}
+
+/** 여러 검색어 결과를 합칩니다. 일부만 실패하면 나머지 결과를 쓰고, 모두 실패하면 첫 오류를 냅니다. */
+async function searchAll(queries: string[], search: (q: string) => Promise<SourceVideo[]>, signal?: AbortSignal): Promise<SourceVideo[]> {
+  const results = await Promise.allSettled(queries.map(search));
+  if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+  const ok = results.filter((r): r is PromiseFulfilledResult<SourceVideo[]> => r.status === "fulfilled");
+  if (!ok.length) throw (results[0] as PromiseRejectedResult).reason;
+  const unique = new Map<string, SourceVideo>();
+  for (const source of ok.flatMap(r => r.value)) {
+    const existing = unique.get(source.id);
+    // 두 언어 검색에 모두 걸린 영상은 관련도가 높은 쪽을 남깁니다.
+    if (!existing || existing.relevance < source.relevance) unique.set(source.id, source);
+  }
+  return [...unique.values()];
 }
 
 export async function searchYouTube(topic: TopicInfo, hints: string[], helper: string, signal?: AbortSignal): Promise<SourceVideo[]> {
-  const url = `${helper}/api/youtube/search?q=${encodeURIComponent(socialQuery(topic, hints, false))}&limit=15`;
-  const response = await fetch(url, { signal });
-  if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `YouTube 검색 실패 (${response.status})`);
-  return parseYouTubeSearch(await response.json(), helper);
+  return searchAll(
+    socialQueries(topic, hints),
+    async q => {
+      const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(q)}&limit=12`, { signal });
+      if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `YouTube 검색 실패 (${response.status})`);
+      return parseYouTubeSearch(await response.json(), helper);
+    },
+    signal
+  );
 }
 
 /** 배포된 웹앱의 /api 함수 주소. 로컬 개발(vite)에는 함수가 없으므로 배포 주소를 씁니다. */
@@ -173,7 +201,10 @@ async function fetchJson(url: string, signal?: AbortSignal) {
  * 그것도 막히면 Vercel 함수 프록시를 거칩니다.
  */
 export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
-  const q = socialQuery(topic, hints, true);
+  return searchAll(socialQueries(topic, hints), q => searchRedditOnce(q, helper, signal), signal);
+}
+
+async function searchRedditOnce(q: string, helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
   if (helper) return parseRedditSearch(await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=25`, signal), helper);
   const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "25", raw_json: "1" });
   let data: unknown;
