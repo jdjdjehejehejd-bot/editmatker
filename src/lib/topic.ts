@@ -274,7 +274,8 @@ const WEIGHTED = /^(\d+(?:\.\d+)?)\s*[:：]\s*(.+?)\s*[:：]?$/;
 
 export function parseTopicInput(input: string): TopicSpec[] {
   const specs: TopicSpec[] = [];
-  for (const part of input.split(/[,，、\n]/)) {
+  // 쉼표 외에 줄바꿈, |, ·, 앞뒤를 띄운 / 와 + 로도 나눕니다("AC/DC"·"Tom & Jerry"처럼 이름 속 기호는 그대로).
+  for (const part of input.split(/[,，、\n|·]|\s[/+]\s/)) {
     const text = part.trim();
     if (!text) continue;
     let match = WEIGHTED.exec(text);

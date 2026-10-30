@@ -170,3 +170,15 @@ describe("스포츠 주제 판별", () => {
     expect(mentionsSports("잔잔한 감성, 따뜻한 색감")).toBe(false);
   });
 });
+
+describe("주제 나누기 기호", () => {
+  it("쉼표 외에 |, ·, 띄운 / + 로도 나누되 이름 속 기호는 그대로 둔다", async () => {
+    const { parseTopicInput } = await import("./topic");
+    const terms = (text: string) => parseTopicInput(text).map(t => t.term);
+    expect(terms("손흥민 | 케인")).toEqual(["손흥민", "케인"]);
+    expect(terms("손흥민·케인")).toEqual(["손흥민", "케인"]);
+    expect(terms("손흥민 / 2:케인:")).toEqual(["손흥민", "케인"]);
+    expect(terms("손흥민 + 케인")).toEqual(["손흥민", "케인"]);
+    expect(terms("AC/DC, Tom & Jerry")).toEqual(["AC/DC", "Tom & Jerry"]);
+  });
+});

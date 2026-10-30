@@ -507,6 +507,16 @@ export default function App() {
                 <strong>editmatker</strong> {reelTitle} 에딧 <span className="tags">{hashtags}</span>
               </p>
               {statusText && status !== "running" && <p className="status-line">{statusText}</p>}
+              {result && result.topicSummary.length > 1 && (
+                <div className={`topic-summary ${result.topicSummary.some(t => !t.used) ? "warn" : ""}`}>
+                  <b>주제별 영상</b>
+                  {result.topicSummary.map(t => (
+                    <span key={t.label} title={t.note ?? undefined}>
+                      {t.label} {t.used}개{t.note ? ` — ${t.note}` : ""}
+                    </span>
+                  ))}
+                </div>
+              )}
               {result?.profile && (
                 <p className="learned">
                   <b>배운 스타일</b> {describeProfile(result.profile)} · 컷 {result.profile.cuts}개 분석{result.profile.grade ? ` · ${GRADE_LABEL[result.profile.grade]}` : ""}
