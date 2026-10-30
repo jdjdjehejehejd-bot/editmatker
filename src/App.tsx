@@ -3,6 +3,7 @@ import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, t
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
+import { checkUserInput } from "./lib/moderation";
 import { parseTopicInput } from "./lib/topic";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
@@ -51,6 +52,7 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   const preview = useMemo(() => parseStyle(features), [features]);
   const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
+  const blockedInput = useMemo(() => checkUserInput(topic, features), [topic, features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
   const [width, height] = ASPECT_SIZE[aspect];
 
@@ -85,7 +87,7 @@ export default function App() {
   };
 
   const start = async () => {
-    if (!topic.trim() || status === "running") return;
+    if (!topic.trim() || status === "running" || blockedInput) return;
     reset();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -305,12 +307,15 @@ export default function App() {
             </div>
           )}
 
+          {blockedInput && <p className="error">🛡 {blockedInput}</p>}
+          <p className="censor-note">🛡 검열 켜짐 · 부적절한 단어가 들어간 입력·영상과 선정적인 장면이 감지된 영상은 쓰지 않아요.</p>
+
           {status === "running" ? (
             <button className="primary" type="button" onClick={stop}>
               중단하기
             </button>
           ) : (
-            <button className="primary" type="button" onClick={start} disabled={!topic.trim()}>
+            <button className="primary" type="button" onClick={start} disabled={!topic.trim() || Boolean(blockedInput)}>
               {status === "done" ? "다시 만들기" : "에딧 만들기"}
             </button>
           )}
@@ -444,6 +449,7 @@ export default function App() {
         <p>
           영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>을 고르면 비영리(NC)·변경금지(ND)이거나 라이선스가 표시되지 않은 영상도 쓰므로, 결과물을 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 결과물을 자유롭게 공유하려면 <b>재사용 가능만</b>(Public domain · CC0 · CC BY · CC BY-SA)을 고르세요. CC BY-SA 자료가 포함되면 결과물도 같은 조건으로 공유해야 합니다.
         </p>
+        <p>검열: 입력·검색어·영상 제목·채널·분류에서 성적·욕설·혐오·잔혹·약물 관련 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사해 선정적인 영상을 뺍니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
         <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다. 최신 Chrome · Edge · Firefox 데스크톱을 권장합니다.</p>
       </footer>
     </div>

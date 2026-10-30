@@ -13,7 +13,7 @@ export function isRedditMediaUrl(value: string): boolean {
 }
 
 export function redditSearchParams(q: string, limit: number) {
-  return new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: String(limit), raw_json: "1" });
+  return new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: String(limit), raw_json: "1", include_over_18: "off" });
 }
 
 let token: { value: string; expiresAt: number } | null = null;
@@ -54,7 +54,7 @@ export async function searchReddit(q: string, limit: number): Promise<Response> 
  * Reddit 검색 응답과 같은 모양({ data: { children: [{ data }] } })으로 바꿉니다.
  */
 export async function searchPullPush(q: string, limit: number): Promise<unknown> {
-  const url = `https://api.pullpush.io/reddit/search/submission/?${new URLSearchParams({ q, size: String(Math.min(100, limit * 2)) })}`;
+  const url = `https://api.pullpush.io/reddit/search/submission/?${new URLSearchParams({ q, size: String(Math.min(100, limit * 2)), over_18: "false" })}`;
   const response = await fetch(url, { headers: { "User-Agent": USER_AGENT } });
   if (!response.ok) throw new Error(`PullPush 응답 오류 (${response.status})`);
   return toListing(await response.json());

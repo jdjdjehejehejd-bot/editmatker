@@ -11,7 +11,13 @@ export interface VideoAnalysis {
   width: number;
   height: number;
   samples: FrameSample[];
+  /** 검열용 장면(224×224). 검사가 끝나면 비웁니다. */
+  keyframes: HTMLCanvasElement[];
 }
+
+/** 영상마다 검열에 쓸 장면 수 */
+const KEYFRAMES = 10;
+const KEYFRAME_SIZE = 224;
 
 const LOAD_TIMEOUT_MS = 20_000;
 
@@ -136,11 +142,20 @@ export async function analyzeVideo(
   const audioPromise = audioEnvelope(blob, times, step);
 
   const raw: Omit<FrameSample, "cut" | "audio">[] = [];
+  // 전체 길이에 고르게 퍼진 장면을 검열용으로 따로 담아 둡니다.
+  const keyframeAt = new Set(Array.from({ length: Math.min(KEYFRAMES, times.length) }, (_, k) => Math.floor(((k + 0.5) * times.length) / Math.min(KEYFRAMES, times.length))));
+  const keyframes: HTMLCanvasElement[] = [];
   let previous: Float32Array | null = null;
   for (let i = 0; i < times.length; i++) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     await seek(video, times[i]);
     ctx.drawImage(video, 0, 0, W, H);
+    if (keyframeAt.has(i)) {
+      const frame = document.createElement("canvas");
+      frame.width = frame.height = KEYFRAME_SIZE;
+      frame.getContext("2d")!.drawImage(video, 0, 0, KEYFRAME_SIZE, KEYFRAME_SIZE);
+      keyframes.push(frame);
+    }
     const pixels = ctx.getImageData(0, 0, W, H).data;
     const luma = new Float32Array(W * H);
     let sumL = 0;
@@ -173,7 +188,7 @@ export async function analyzeVideo(
   const audio = await audioPromise;
   const cuts = detectCuts(raw.map(r => r.motion));
   const samples = raw.map((r, i) => ({ ...r, audio: audio[i] ?? 0, cut: cuts[i] }));
-  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples };
+  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes };
   disposeVideo(video);
   return result;
 }

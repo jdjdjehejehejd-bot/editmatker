@@ -23,6 +23,8 @@ export interface SourceVideo {
   reusable: boolean;
   pageUrl: string;
   mediaUrl: string;
+  /** 분류·태그 등 검열에 함께 쓰는 설명 */
+  tags?: string;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
   fallbackUrl?: string;
   poster: string | null;
@@ -173,6 +175,7 @@ export function parseCommonsPage(page: any, relevance: number, mode: LicenseMode
     poster: typeof info.thumburl === "string" ? info.thumburl : null,
     duration,
     bytes: media.bytes,
+    tags: plainText(`${meta.Categories?.value ?? ""} ${meta.ObjectName?.value ?? ""}`, 600),
     relevance,
   };
 }
@@ -181,7 +184,7 @@ const COMMONS_PROPS = {
   prop: "videoinfo",
   viprop: "url|size|mime|mediatype|extmetadata|derivatives",
   viurlwidth: "480",
-  viextmetadatafilter: "LicenseShortName|LicenseUrl|Artist|Credit",
+  viextmetadatafilter: "LicenseShortName|LicenseUrl|Artist|Credit|Categories|ObjectName",
 };
 
 async function commonsQuery(params: Record<string, string>, signal?: AbortSignal): Promise<any[]> {
@@ -279,7 +282,7 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
 async function archiveQuery(q: string, limit: number, base: number, mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const url = new URL("https://archive.org/advancedsearch.php");
   url.search = new URLSearchParams({ q, rows: String(limit), output: "json", sort: "downloads desc" }).toString();
-  for (const field of ["identifier", "title", "creator", "licenseurl"]) url.searchParams.append("fl[]", field);
+  for (const field of ["identifier", "title", "creator", "licenseurl", "subject"]) url.searchParams.append("fl[]", field);
   const data = await getJson(url.toString(), signal);
   const docs: any[] = data?.response?.docs ?? [];
   if (stats) stats.scanned += docs.length;
@@ -305,6 +308,7 @@ async function archiveQuery(q: string, limit: number, base: number, mode: Licens
         poster: `https://archive.org/services/img/${encodeURIComponent(doc.identifier)}`,
         duration: file.duration,
         bytes: file.bytes,
+        tags: plainText(Array.isArray(doc.subject) ? doc.subject.join(", ") : doc.subject, 600),
         relevance: base - index * 0.05,
       };
     })

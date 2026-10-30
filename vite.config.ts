@@ -6,5 +6,7 @@ import { defineConfig } from "vite";
 export default defineConfig({
   base: "./",
   plugins: [react()],
+  // 장면 검열 모델(tfjs·NSFW.js)은 필요할 때만 따로 받는 큰 파일이라 크기 경고를 넓힙니다.
+  build: { chunkSizeWarningLimit: 4000 },
   test: { environment: "node" },
 });

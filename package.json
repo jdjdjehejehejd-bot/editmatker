@@ -14,6 +14,9 @@
     "format": "prettier --write ."
   },
   "dependencies": {
+    "@tensorflow/tfjs": "4.22.0",
+    "buffer": "6.0.3",
+    "nsfwjs": "4.4.0",
     "react": "^19.2.1",
     "react-dom": "^19.2.1"
   },
