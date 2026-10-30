@@ -202,8 +202,8 @@ export default function App() {
             <span>editmatker</span>
           </div>
           {nsfwMode ? (
-            <span className="shield off" title="특징에 NSFW를 적어 성적 콘텐츠 검열만 꺼져 있어요">
-              <ShieldIcon /> 검열 해제 (NSFW)
+            <span className="shield off" title="성적 콘텐츠 검열이 꺼져 있어요">
+              <ShieldIcon /> 검열 해제
             </span>
           ) : (
             <span className="shield" title="부적절한 단어·장면이 있는 영상은 쓰지 않아요">
@@ -264,7 +264,7 @@ export default function App() {
 
             <label className="field">
               <span>특징 · 분위기</span>
-              <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감 · 성적 콘텐츠 검열을 끄려면 NSFW" />
+              <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
             </label>
 
             <div className="style-preview" aria-live="polite">
@@ -501,7 +501,7 @@ export default function App() {
           <p>
             영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 제목·설명에 주제 이름이 나오는 영상만 씁니다. 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>은 재사용 허가가 없는 영상도 쓰므로 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 자유롭게 공유하려면 <b>재사용 가능만</b>을 고르세요.
           </p>
-          <p>검열: 입력·검색어·영상 제목·채널·분류에서 부적절한 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사합니다. <b>특징 · 분위기</b>에 <b>NSFW</b>를 적으면 성적 콘텐츠 검사만 꺼지고(성적 단어·성인물 표시·선정적 장면), 욕설·혐오· 잔혹·약물과 아동·비동의 관련 내용은 그대로 차단됩니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
+          <p>검열: 입력·검색어·영상 제목·채널·분류에서 부적절한 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사합니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
           <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다.</p>
         </footer>
       </main>
