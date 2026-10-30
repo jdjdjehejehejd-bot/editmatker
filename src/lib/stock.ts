@@ -196,7 +196,11 @@ export function stockQueries(topic: TopicInfo, hints: string[]): string[] {
   return [...new Set(list.map(q => q.trim()).filter(Boolean))];
 }
 
+/** 서버에도 키가 없다고 답한 출처 — 같은 세션에서 다시 묻지 않습니다(주제·검색어마다 헛요청을 보내지 않게). */
+const missingServerKey = new Set<StockProvider>();
+
 async function fetchStock(provider: StockProvider, q: string, key: string, signal?: AbortSignal): Promise<any> {
+  if (!key && missingServerKey.has(provider)) throw new Error("API 키 필요");
   const asText = provider === "mixkit";
   const read = async (response: Response) => {
     if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `응답 오류 ${response.status}`);
@@ -212,7 +216,9 @@ async function fetchStock(provider: StockProvider, q: string, key: string, signa
     }
   }
   const headers: Record<string, string> = key ? { "X-Api-Key": key } : {};
-  return read(await fetch(`${proxyBase()}/api/stock?${new URLSearchParams({ provider, q })}`, { headers, signal }));
+  const response = await fetch(`${proxyBase()}/api/stock?${new URLSearchParams({ provider, q })}`, { headers, signal });
+  if (response.status === 501 && !key) missingServerKey.add(provider);
+  return read(response);
 }
 
 const PARSERS: Record<StockProvider, (data: any, relevance: number, limit: number, stats?: SearchStats) => SourceVideo[]> = {

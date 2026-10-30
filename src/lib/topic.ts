@@ -155,11 +155,25 @@ async function similarArticles(enwikiTitle: string | null, signal?: AbortSignal)
   return (data?.query?.search ?? []).map((hit: any) => hit?.title).filter((title: unknown): title is string => typeof title === "string");
 }
 
+/** 속도: 같은 주제로 다시 만들 때 Wikidata·Wikipedia를 또 부르지 않도록 성공한 해석을 기억합니다(새로 고치면 지워짐). */
+const resolved = new Map<string, TopicInfo>();
+
 export async function resolveTopic(query: string, signal?: AbortSignal, options: ModerationOptions = {}): Promise<TopicInfo> {
+  const key = `${options.nsfw ? 1 : 0}|${query}`;
+  const cached = resolved.get(key);
+  if (cached) return structuredClone(cached);
+  const info = await resolveTopicOnce(query, signal, options);
+  // 해석에 실패해 기본값이 나온 경우(네트워크 오류 등)는 기억하지 않고 다음에 다시 시도합니다.
+  if (info.ok) resolved.set(key, structuredClone(info.topic));
+  return info.topic;
+}
+
+async function resolveTopicOnce(query: string, signal: AbortSignal | undefined, options: ModerationOptions): Promise<{ topic: TopicInfo; ok: boolean }> {
   const fallback: TopicInfo = { query, label: query, englishLabel: null, description: null, commonsCategory: null, wikidataVideos: [], aliases: [], related: [] };
   try {
     const id = await findEntityId(query, signal);
-    if (!id) return fallback;
+    // 못 찾은 것이 네트워크 오류 때문일 수도 있어 기억하지 않습니다.
+    if (!id) return { topic: fallback, ok: false };
     const data = await getJson(
       api("https://www.wikidata.org/w/api.php", { action: "wbgetentities", ids: id, props: "labels|aliases|descriptions|claims|sitelinks", languages: "en|ko", sitefilter: "enwiki" }),
       signal
@@ -175,7 +189,7 @@ export async function resolveTopic(query: string, signal?: AbortSignal, options:
     ]);
     const names = [query, label, englishLabel].filter((v): v is string => Boolean(v)).map(n => n.toLowerCase());
     const related = [...new Set([...fromClaims, ...similar])].filter(r => !names.includes(r.toLowerCase())).slice(0, MAX_RELATED);
-    return {
+    const topic: TopicInfo = {
       query,
       label,
       englishLabel,
@@ -188,9 +202,10 @@ export async function resolveTopic(query: string, signal?: AbortSignal, options:
       aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowedWith(options, alias)),
       related: related.filter(item => isTextAllowedWith(options, item)),
     };
+    return { topic, ok: true };
   } catch (error) {
     if (signal?.aborted) throw error;
-    return fallback;
+    return { topic: fallback, ok: false };
   }
 }
 

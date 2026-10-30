@@ -3,6 +3,7 @@
 import { createHiddenVideo, disposeVideo, seek } from "./analyze";
 import { cropOffset, focusAt, smoothTrack, type FocusPoint } from "./framing";
 import type { FrameSample } from "./highlights";
+import { renderableTexts, TEXT_SIZE_RATIO, textAlpha, textAnchorY, type TextOverlay } from "./overlay";
 import type { EditPlan, Segment } from "./plan";
 import type { EditStyle, Grade } from "./style";
 
@@ -15,6 +16,13 @@ export const ASPECT_SIZE: Record<Aspect, [number, number]> = {
 };
 
 export const CREDIT_SECONDS = 3;
+/** 출처 화면 없이 끝낼 때 마지막 페이드아웃 길이 */
+const END_FADE_SECONDS = 0.5;
+
+/** 출처 화면을 붙이면 편집 뒤에 더해지는 시간 */
+export function tailSeconds(showCredits = true) {
+  return showCredits ? CREDIT_SECONDS : 0;
+}
 const POOL_SIZE = 5;
 /** 지금 컷 다음 몇 개를 미리 찾아 둘지 — 직전 컷 재생기는 크로스페이드에 쓰도록 비워 둡니다(POOL_SIZE - 2). */
 const LOOKAHEAD = POOL_SIZE - 2;
@@ -59,6 +67,12 @@ export interface RenderOptions {
   title: string;
   subtitle: string;
   credits: string[];
+  /** 시작 제목을 그릴지 (기본 true) */
+  showTitle?: boolean;
+  /** 끝에 출처 화면을 붙일지 (기본 true, 끄면 마지막에 검게 페이드아웃) */
+  showCredits?: boolean;
+  /** 사용자가 넣은 텍스트 */
+  texts?: TextOverlay[];
   music: { buffer: AudioBuffer; offset: number };
   /** 미리 깨워 둔 AudioContext (iOS는 버튼을 누를 때 만든 것만 소리가 남) */
   audio?: AudioContext;
@@ -134,8 +148,25 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     })
   );
   const beat = 60 / plan.bpm;
-  const total = plan.duration + CREDIT_SECONDS;
+  const showTitle = options.showTitle !== false;
+  const showCredits = options.showCredits !== false;
+  const total = plan.duration + tailSeconds(showCredits);
   const font = `"Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif`;
+
+  // 속도: 글자 줄바꿈(measureText)은 매 프레임 하지 않고 미리 한 번만 계산합니다.
+  const titleSize = Math.round(Math.min(W, H) * 0.11);
+  const titleFont = `800 ${titleSize}px ${font}`;
+  ctx.font = titleFont;
+  const titleLines = showTitle && options.title.trim() ? wrapText(ctx, options.title.toUpperCase(), W * 0.86) : [];
+  const creditSize = Math.round(Math.min(W, H) * 0.034);
+  ctx.font = `500 ${creditSize}px ${font}`;
+  const creditLines = showCredits ? options.credits.slice(0, 8).map(credit => wrapText(ctx, credit, W * 0.84)) : [];
+  const texts = renderableTexts(options.texts ?? [], plan.duration).map(text => {
+    const size = Math.round(Math.min(W, H) * TEXT_SIZE_RATIO[text.size]);
+    const textFont = `800 ${size}px ${font}`;
+    ctx.font = textFont;
+    return { overlay: text, size, font: textFont, lines: wrapText(ctx, text.text, W * 0.86) };
+  });
 
   // 재생기 풀: 지금 컷이 재생되는 동안 다음 컷들을 미리 찾아 둡니다.
   const pool = Array.from({ length: POOL_SIZE }, createHiddenVideo);
@@ -299,22 +330,46 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     }
     // 인트로 타이틀
     const titleEnd = plan.dropAt - 0.15;
-    if (now < titleEnd) {
+    if (titleLines.length && now < titleEnd) {
       const alpha = Math.min(1, now / 0.6, (titleEnd - now) / 0.4);
-      const size = Math.round(Math.min(W, H) * 0.11);
+      const size = titleSize;
       ctx.globalAlpha = Math.max(0, alpha);
       ctx.textAlign = "center";
       ctx.textBaseline = "middle";
-      ctx.font = `800 ${size}px ${font}`;
+      ctx.font = titleFont;
       ctx.shadowColor = "rgba(0,0,0,0.6)";
       ctx.shadowBlur = 24;
       ctx.fillStyle = "#fff";
-      const lines = wrapText(ctx, options.title.toUpperCase(), W * 0.86);
+      const lines = titleLines;
       lines.forEach((line, i) => ctx.fillText(line, W / 2, H * 0.5 + (i - (lines.length - 1) / 2) * size * 1.1));
-      ctx.font = `700 ${Math.round(size * 0.3)}px ${font}`;
-      ctx.fillStyle = "#ffd2c6";
-      ctx.fillText(options.subtitle, W / 2, H * 0.5 + ((lines.length + 1) / 2) * size * 1.1);
+      if (options.subtitle) {
+        ctx.font = `700 ${Math.round(size * 0.3)}px ${font}`;
+        ctx.fillStyle = "#ffd2c6";
+        ctx.fillText(options.subtitle, W / 2, H * 0.5 + ((lines.length + 1) / 2) * size * 1.1);
+      }
       ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+    // 사용자가 넣은 텍스트
+    for (const text of texts) {
+      const alpha = textAlpha(text.overlay, now);
+      if (alpha <= 0) continue;
+      ctx.globalAlpha = alpha;
+      ctx.textAlign = "center";
+      ctx.textBaseline = "middle";
+      ctx.font = text.font;
+      ctx.shadowColor = "rgba(0,0,0,0.7)";
+      ctx.shadowBlur = 18;
+      ctx.fillStyle = "#fff";
+      const anchor = H * textAnchorY(text.overlay.position);
+      text.lines.forEach((line, i) => ctx.fillText(line, W / 2, anchor + (i - (text.lines.length - 1) / 2) * text.size * 1.15));
+      ctx.globalAlpha = 1;
+      ctx.shadowBlur = 0;
+    }
+    // 출처 화면이 없으면 끝에서 검게 페이드아웃
+    if (!showCredits && now > plan.duration - END_FADE_SECONDS) {
+      ctx.fillStyle = `rgba(0,0,0,${Math.min(1, (now - (plan.duration - END_FADE_SECONDS)) / END_FADE_SECONDS)})`;
+      ctx.fillRect(0, 0, W, H);
     }
     // 시작 페이드인
     if (now < 0.3) {
@@ -332,7 +387,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     ctx.globalAlpha = Math.min(1, local / 0.4);
     ctx.textAlign = "center";
     ctx.textBaseline = "top";
-    const size = Math.round(Math.min(W, H) * 0.034);
+    const size = creditSize;
     ctx.fillStyle = "#f26a4b";
     ctx.font = `700 ${size * 1.3}px ${font}`;
     let y = H * 0.3;
@@ -340,8 +395,8 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     y += size * 2.6;
     ctx.fillStyle = "#e9e7df";
     ctx.font = `500 ${size}px ${font}`;
-    for (const credit of options.credits.slice(0, 8)) {
-      for (const line of wrapText(ctx, credit, W * 0.84)) {
+    for (const lines of creditLines) {
+      for (const line of lines) {
         ctx.fillText(line, W / 2, y);
         y += size * 1.45;
       }

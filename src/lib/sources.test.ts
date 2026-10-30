@@ -226,3 +226,27 @@ describe("직접 올린 영상", () => {
     expect(progress).toBe(1);
   });
 });
+
+describe("검색 결과 재사용", () => {
+  it("같은 조건으로 다시 찾으면 네트워크를 다시 부르지 않음", async () => {
+    const { findSources } = await import("./sources");
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      calls++;
+      const url = String(input);
+      const body = url.includes("mixkit") || url.includes("provider=mixkit") ? "" : url.includes("api/stock") ? JSON.stringify({ error: "API 키 필요" }) : "{}";
+      return new Response(body, { status: url.includes("api/stock") && !url.includes("mixkit") ? 501 : 200 });
+    }) as typeof fetch;
+    try {
+      const topic = { query: "캐시테스트", label: "캐시테스트", englishLabel: "Cache Test", description: null, commonsCategory: null, wikidataVideos: [], aliases: [], related: [] };
+      await findSources(topic, [], "reusable", null);
+      const first = calls;
+      expect(first).toBeGreaterThan(0);
+      await findSources(topic, [], "reusable", null);
+      expect(calls).toBe(first);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});

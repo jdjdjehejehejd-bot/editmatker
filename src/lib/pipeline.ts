@@ -6,7 +6,7 @@ import { checkUserInput, GenerationBlockedError, type ModerationOptions, isNsfwR
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
-import { CREDIT_SECONDS } from "./render";
+import { tailSeconds } from "./render";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
 import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, uploadedSource, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
@@ -46,6 +46,10 @@ export interface PipelineInput {
   uploadFiles?: File[];
   /** 영상을 찾지 않고 올린 영상만 편집 (주제는 제목·스타일·참고 에딧 학습에만 씀) */
   uploadsOnly?: boolean;
+  /** 끝에 출처 화면을 붙일지 (배경음악 길이를 맞추려고, 기본 true) */
+  showCredits?: boolean;
+  /** 직접 입력한 제목 (비우면 주제 이름) */
+  title?: string;
   /** 자동 작곡 배경음악 스타일 (내 음악 파일을 넣으면 쓰지 않음) */
   musicStyle?: MusicStyle;
   /** 편집 스타일 직접 설정 (비어 있으면 특징 문장·참고 에딧으로 자동) */
@@ -447,7 +451,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const music = userMusic
     ? { buffer: userMusic.buffer, offset: userMusic.offset }
     : {
-        buffer: await synthesizeMusic({ mood: musicMood, bpm, duration: plan.duration + CREDIT_SECONDS, dropAt: plan.dropAt, outroAt }),
+        buffer: await synthesizeMusic({ mood: musicMood, bpm, duration: plan.duration + tailSeconds(input.showCredits), dropAt: plan.dropAt, outroAt }),
         offset: 0,
       };
 
@@ -459,7 +463,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   // 올린 영상만 편집하면 입력한 주제 이름을 제목으로 씁니다.
   const titled = searching ? online.filter(t => loadedBy.get(t)!.length) : topics;
-  const title = titled.length ? combinedTitle(titled.map(t => t.info.label)) : UPLOAD_LABEL;
+  const title = input.title?.trim() || (titled.length ? combinedTitle(titled.map(t => t.info.label)) : UPLOAD_LABEL);
   const topicSummary: TopicSummary[] = [...(uploadTopic ? [uploadTopic] : []), ...(searching ? topics : [])].map(t => {
     const used = loadedBy.get(t)?.length ?? 0;
     let note: string | null = null;

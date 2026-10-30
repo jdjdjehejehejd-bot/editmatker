@@ -3,6 +3,7 @@
 
 import type { Aspect } from "./render";
 import type { LicenseMode } from "./sources";
+import { sanitizeOverlay, type OverlaySettings } from "./overlay";
 import { sanitizeOverrides, type MusicStyle, type StyleOverrides } from "./style";
 
 export interface Preset {
@@ -18,6 +19,8 @@ export interface Preset {
   musicStyle?: MusicStyle;
   /** 편집 스타일 직접 설정 */
   style?: StyleOverrides;
+  /** 제목·출처·텍스트 */
+  overlay?: OverlaySettings;
   /** 기본 제공 프리셋은 지울 수 없습니다 */
   builtin?: boolean;
 }
@@ -55,6 +58,7 @@ export function sanitizePreset(value: any): Preset | null {
     licenseMode: value.licenseMode === "reusable" ? "reusable" : "any",
     musicStyle: MUSIC_STYLES.includes(value.musicStyle) ? value.musicStyle : "auto",
     style: sanitizeOverrides(value.style),
+    overlay: sanitizeOverlay(value.overlay),
   };
 }
 
@@ -95,7 +99,8 @@ export function matchesPreset(preset: Preset, settings: PresetSettings) {
     preset.sourceCount === settings.sourceCount &&
     preset.licenseMode === settings.licenseMode &&
     (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto") &&
-    JSON.stringify(sanitizeOverrides(preset.style)) === JSON.stringify(sanitizeOverrides(settings.style))
+    JSON.stringify(sanitizeOverrides(preset.style)) === JSON.stringify(sanitizeOverrides(settings.style)) &&
+    JSON.stringify(sanitizeOverlay(preset.overlay)) === JSON.stringify(sanitizeOverlay(settings.overlay))
   );
 }
 
