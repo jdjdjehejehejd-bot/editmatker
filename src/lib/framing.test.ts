@@ -95,3 +95,37 @@ describe("최적화한 경로 계산이 예전과 같은 결과", () => {
     }
   });
 });
+
+describe("화면 맞추기", () => {
+  it("자동: 가로 영상을 세로 화면에 넣으면 원본의 60%는 보이게 덜 자름", async () => {
+    const { frameScale } = await import("./framing");
+    const cover = 1280 / 1080;
+    const auto = frameScale(1920, 1080, 720, 1280);
+    expect(auto).toBeLessThan(cover);
+    expect(720 / (1920 * auto)).toBeCloseTo(0.6); // 가로의 60%가 보임
+    expect(frameScale(1920, 1080, 720, 1280, "fill")).toBeCloseTo(cover);
+    expect(frameScale(1920, 1080, 720, 1280, "fit")).toBeCloseTo(720 / 1920);
+    // 조금만 잘리는 경우(가로 → 정사각)는 그냥 꽉 채움
+    expect(frameScale(1920, 1080, 1080, 1080)).toBeCloseTo(1);
+    // 같은 비율이면 꽉 채움
+    expect(frameScale(1080, 1920, 720, 1280)).toBeCloseTo(720 / 1080);
+  });
+
+  it("화면보다 작게 그리면 가운데에 둠", () => {
+    expect(cropOffset(0.9, 600, 720)).toBe(60);
+  });
+
+  it("검은 띠(레터박스)를 찾아 뺌", async () => {
+    const { contentBox } = await import("./framing");
+    const rows = [0.01, 0.02, 0.5, 0.6, 0.4, 0.5, 0.5, 0.6, 0.02, 0.01];
+    const cols = Array.from({ length: 10 }, () => 0.5);
+    const box = contentBox(rows, cols);
+    // 띠 경계에서 한 칸 더 안쪽까지 (얇은 검은 선이 남지 않게)
+    expect(box.y).toBeCloseTo(0.3);
+    expect(box.y + box.h).toBeCloseTo(0.7);
+    expect(box.x).toBe(0);
+    expect(box.w).toBe(1);
+    // 내내 어두운 영상은 띠로 보지 않음
+    expect(contentBox(Array(10).fill(0.02), cols)).toEqual({ x: 0, y: 0, w: 1, h: 1 });
+  });
+});

@@ -14,7 +14,7 @@ describe("프리셋", () => {
     const storage = memoryStorage();
     const list = upsertPreset([], "토트넘 듀오", settings, 1);
     savePresets(list, storage);
-    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto", style: {}, overlay: DEFAULT_OVERLAY }]);
+    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto", style: {}, overlay: DEFAULT_OVERLAY, framing: "auto" }]);
   });
 
   it("같은 이름은 덮어쓰고, 새 이름은 맨 앞에 추가한다", () => {

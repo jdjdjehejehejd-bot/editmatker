@@ -1,6 +1,6 @@
 // 내려받은 영상을 브라우저에서 훑어 프레임별 움직임·색·소리 세기를 측정합니다.
 
-import { interestPoint } from "./framing";
+import { contentBox, interestPoint, type ContentBox } from "./framing";
 import { detectCuts, type FrameSample } from "./highlights";
 
 const W = 64;
@@ -12,6 +12,8 @@ export interface VideoAnalysis {
   width: number;
   height: number;
   samples: FrameSample[];
+  /** 검은 띠(레터박스·필러박스)를 뺀 실제 화면 영역 (0~1) */
+  content?: ContentBox;
   /** 검열용 장면(224×224). 검사가 끝나면 비웁니다. */
   keyframes: HTMLCanvasElement[];
 }
@@ -21,6 +23,8 @@ const KEYFRAMES = 10;
 const KEYFRAME_SIZE = 224;
 
 const LOAD_TIMEOUT_MS = 20_000;
+/** 이보다 큰 파일은 소리 세기를 재지 않습니다 — 파일 전체를 메모리에 올려 풀어야 해서 휴대폰이 멈출 수 있음 */
+const MAX_AUDIO_DECODE_BYTES = 120 * 1024 * 1024;
 
 /**
  * 화면 밖에 숨긴 video 요소를 만듭니다. iOS Safari는 문서에 붙지 않았거나 한 번도 재생하지 않은
@@ -104,6 +108,7 @@ export function seek(video: HTMLVideoElement, time: number): Promise<void> {
 }
 
 async function audioEnvelope(blob: Blob, times: number[], step: number): Promise<number[]> {
+  if (blob.size > MAX_AUDIO_DECODE_BYTES) return times.map(() => 0);
   try {
     const ctx = new OfflineAudioContext(1, 44100, 44100);
     const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
@@ -149,6 +154,9 @@ export async function analyzeVideo(
   const keyframeAt = new Set(Array.from({ length: Math.min(KEYFRAMES, times.length) }, (_, k) => Math.floor(((k + 0.5) * times.length) / Math.min(KEYFRAMES, times.length))));
   const keyframes: HTMLCanvasElement[] = [];
   let previous: Float32Array | null = null;
+  // 줄·칸마다 가장 밝았던 밝기 — 끝까지 어두운 가장자리는 검은 띠로 봅니다.
+  const rowPeak = new Float32Array(H);
+  const colPeak = new Float32Array(W);
   for (let i = 0; i < times.length; i++) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     await seek(video, times[i]);
@@ -164,18 +172,28 @@ export async function analyzeVideo(
     let sumL = 0;
     let sumL2 = 0;
     let sumS = 0;
+    let edge = 0;
+    const rowSum = new Float32Array(H);
+    const colSum = new Float32Array(W);
     for (let p = 0, j = 0; p < pixels.length; p += 4, j++) {
       const r = pixels[p] / 255;
       const g = pixels[p + 1] / 255;
       const b = pixels[p + 2] / 255;
       const l = 0.2126 * r + 0.7152 * g + 0.0722 * b;
       luma[j] = l;
+      const x = j % W;
+      const y = (j - x) / W;
+      rowSum[y] += l;
+      colSum[x] += l;
+      if (x) edge += Math.abs(l - luma[j - 1]);
       sumL += l;
       sumL2 += l * l;
       const max = Math.max(r, g, b);
       sumS += max ? (max - Math.min(r, g, b)) / max : 0;
     }
     const n = W * H;
+    for (let y = 0; y < H; y++) rowPeak[y] = Math.max(rowPeak[y], rowSum[y] / W);
+    for (let x = 0; x < W; x++) colPeak[x] = Math.max(colPeak[x], colSum[x] / H);
     const mean = sumL / n;
     const contrast = Math.sqrt(Math.max(0, sumL2 / n - mean * mean));
     let motion = 0;
@@ -185,14 +203,14 @@ export async function analyzeVideo(
     }
     const focus = interestPoint(pixels, luma, previous, W, H);
     previous = luma;
-    raw.push({ t: times[i], motion, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, focusX: focus.x, focusY: focus.y, presence: focus.presence });
+    raw.push({ t: times[i], motion, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence });
     onProgress((i + 1) / times.length);
   }
 
   const audio = await audioPromise;
   const cuts = detectCuts(raw.map(r => r.motion));
   const samples = raw.map((r, i) => ({ ...r, audio: audio[i] ?? 0, cut: cuts[i] }));
-  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes };
+  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes, content: contentBox(rowPeak, colPeak) };
   disposeVideo(video);
   return result;
 }

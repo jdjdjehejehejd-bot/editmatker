@@ -98,6 +98,57 @@ export function focusAt(track: FocusPoint[], t: number): { x: number; y: number 
  * 영상 가장자리 밖이 보이지 않게 [view - drawn, 0] 범위로 묶습니다.
  */
 export function cropOffset(focus: number, drawn: number, view: number): number {
+  // 영상이 화면보다 작으면(전체 보이기) 가운데에 둡니다.
+  if (drawn <= view) return (view - drawn) / 2;
   const ideal = view / 2 - focus * drawn;
   return Math.min(0, Math.max(view - drawn, ideal));
+}
+
+/** 화면 맞추기: 자동(너무 많이 잘리면 일부만 자르고 나머지는 흐린 배경), 꽉 채우기(자르기), 전체 보이기 */
+export type Framing = "auto" | "fill" | "fit";
+export const FRAMING_LABEL: Record<Framing, string> = { auto: "자동", fill: "꽉 채우기", fit: "전체 보이기" };
+/** 자동일 때 원본에서 최소한 보이게 할 비율 (가로·세로 각각) */
+export const AUTO_KEEP = 0.6;
+
+/**
+ * 원본(sw×sh)을 화면(W×H)에 그릴 배율.
+ * 자동: 꽉 채우면 원본의 60%도 안 보일 때(예: 가로 영상 → 세로 화면)만 덜 자르고, 남는 곳은 흐린 배경으로 채웁니다.
+ * 덜 자르는 정도가 10% 안쪽이면 얇은 띠가 생기지 않게 그냥 꽉 채웁니다.
+ */
+export function frameScale(sw: number, sh: number, W: number, H: number, framing: Framing = "auto"): number {
+  const cover = Math.max(W / sw, H / sh);
+  const contain = Math.min(W / sw, H / sh);
+  if (framing === "fill") return cover;
+  if (framing === "fit") return contain;
+  const limit = Math.min(W / (sw * AUTO_KEEP), H / (sh * AUTO_KEEP));
+  const scale = Math.min(cover, Math.max(contain, limit));
+  return scale >= cover * 0.9 ? cover : scale;
+}
+
+export interface ContentBox {
+  x: number;
+  y: number;
+  w: number;
+  h: number;
+}
+
+/** 원본 가장자리의 검은 띠(레터박스·필러박스)를 뺀 실제 화면 영역 (0~1). 줄마다 "가장 밝았던 때"의 밝기로 판단합니다. */
+export function contentBox(rowPeak: ArrayLike<number>, colPeak: ArrayLike<number>, threshold = 0.07, maxShare = 0.35): ContentBox {
+  const edges = (peak: ArrayLike<number>) => {
+    const n = peak.length;
+    const limit = Math.floor(n * maxShare);
+    let start = 0;
+    while (start < limit && peak[start] < threshold) start++;
+    let end = n;
+    while (n - end < limit && peak[end - 1] < threshold) end--;
+    // 가운데도 어두우면(밤 장면만 있는 영상) 띠로 보지 않습니다.
+    let brightest = 0;
+    for (let i = start; i < end; i++) brightest = Math.max(brightest, peak[i]);
+    if (brightest < threshold || end - start < n * 0.3) return [0, n];
+    // 띠 경계가 분석 칸 중간에 걸리면 얇은 검은 선이 남으므로, 띠가 있던 쪽은 한 칸 더 안쪽까지 자릅니다.
+    return [start ? start + 1 : 0, end < n ? end - 1 : n];
+  };
+  const [y0, y1] = edges(rowPeak);
+  const [x0, x1] = edges(colPeak);
+  return { x: x0 / colPeak.length, y: y0 / rowPeak.length, w: (x1 - x0) / colPeak.length, h: (y1 - y0) / rowPeak.length };
 }
