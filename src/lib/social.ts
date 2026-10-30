@@ -2,7 +2,7 @@
 // Reddit은 도우미가 없으면 브라우저에서 직접 검색해 소리 없는 영상 파일을 씁니다.
 
 import { describeError, type SearchStats, type SourceVideo } from "./sources";
-import { expandQueries, type SearchQuery, type TopicInfo } from "./topic";
+import { createTopicMatcher, expandQueries, type SearchQuery, type TopicInfo } from "./topic";
 
 export const DEFAULT_HELPER = "http://localhost:8787";
 const MIN_DURATION = 3;
@@ -225,4 +225,52 @@ async function searchRedditOnce(query: SearchQuery, helper: string | null, signa
   }
   if (stats) stats.scanned += countPosts(data);
   return parseRedditSearch(data, helper, weightOffset(query));
+}
+
+// ---------------------------------------------------------------------------
+// 참고 에딧 찾기: "주제 edit", "주제 에딧"으로 검색해 실제 팬 에딧을 찾습니다(스타일 학습용).
+
+const EDIT_TITLE = /\bedits?\b|에딧|\bamv\b|\bfmv\b|tribute|montage|몽타주|\btiktok\b|\breels?\b|shorts/i;
+
+export function referenceQueries(topic: TopicInfo): SearchQuery[] {
+  const korean = [topic.query, topic.label].find(name => /[\uac00-\ud7a3]/.test(name));
+  const english = topic.englishLabel ?? (korean ? null : topic.query);
+  const list: SearchQuery[] = [];
+  if (english) list.push({ q: `${english} edit`, weight: 1, kind: "name" });
+  if (korean) list.push({ q: `${korean} 에딧`, weight: 0.95, kind: "name" });
+  return list;
+}
+
+/** 제목에 에딧 표시와 주제 이름이 모두 있고, 8초~3분 길이인 영상만 고릅니다. */
+export function pickReferenceEdits(sources: SourceVideo[], topic: TopicInfo, limit = 2): SourceVideo[] {
+  const matches = createTopicMatcher(topic);
+  return sources
+    .filter(s => !s.nsfw && EDIT_TITLE.test(s.title) && matches(`${s.title} ${s.tags ?? ""}`) && (s.duration === null || (s.duration >= 8 && s.duration <= 180)))
+    .sort((a, b) => b.relevance - a.relevance)
+    .slice(0, limit);
+}
+
+export async function searchReferenceEdits(topic: TopicInfo, helper: string | null, signal?: AbortSignal): Promise<SourceVideo[]> {
+  const queries = referenceQueries(topic);
+  const settle = (p: Promise<SourceVideo[]>) => p.catch(error => {
+    if (signal?.aborted) throw error;
+    return [] as SourceVideo[];
+  });
+  const [reddit, youtube] = await Promise.all([
+    settle(searchAll(queries, query => searchRedditOnce(query, helper, signal), signal)),
+    helper
+      ? settle(
+          searchAll(
+            queries,
+            async query => {
+              const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=8`, { signal });
+              if (!response.ok) throw new Error(`YouTube 검색 실패 (${response.status})`);
+              return parseYouTubeSearch(await response.json(), helper, weightOffset(query));
+            },
+            signal
+          )
+        )
+      : Promise.resolve([]),
+  ]);
+  return pickReferenceEdits([...youtube, ...reddit], topic);
 }

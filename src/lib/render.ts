@@ -13,7 +13,15 @@ export const ASPECT_SIZE: Record<Aspect, [number, number]> = {
 };
 
 export const CREDIT_SECONDS = 3;
-const POOL_SIZE = 4;
+const POOL_SIZE = 5;
+/** 지금 컷 다음 몇 개를 미리 찾아 둘지 — 직전 컷 재생기는 크로스페이드에 쓰도록 비워 둡니다(POOL_SIZE - 2). */
+const LOOKAHEAD = POOL_SIZE - 2;
+const FADE_SECONDS = 0.35;
+const PUNCH_SECONDS = 0.18;
+const WHIP_SECONDS = 0.14;
+
+/** 부드러운 시작·끝 (줌이 기계적으로 보이지 않게) */
+const easeInOut = (p: number) => (p < 0.5 ? 2 * p * p : 1 - (-2 * p + 2) ** 2 / 2);
 
 const GRADE_FILTER: Record<Grade, string> = {
   natural: "contrast(1.05) saturate(1.05)",
@@ -135,8 +143,8 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       video.playbackRate = seg.rate;
     })();
   };
-  for (let i = 0; i < POOL_SIZE - 1; i++) prepare(i);
-  await Promise.all(prepared.slice(0, POOL_SIZE - 1));
+  for (let i = 0; i <= LOOKAHEAD; i++) prepare(i);
+  await Promise.all(prepared.slice(0, LOOKAHEAD + 1));
 
   const audio = options.audio ?? new AudioContext();
   await audio.resume().catch(() => undefined);
@@ -169,12 +177,22 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   musicGain.gain.linearRampToValueAtTime(0, t0 + total);
 
   let current = -1;
+  /** 크로스페이드 중인 직전 컷 */
+  let previous = -1;
 
-  const drawVideo = (seg: Segment, video: HTMLVideoElement, now: number) => {
+  const drawVideo = (seg: Segment, video: HTMLVideoElement, now: number, alpha = 1) => {
     const local = now - seg.start;
-    const p = Math.min(1, local / seg.duration);
+    const p = Math.min(1, Math.max(0, local / seg.duration));
+    const eased = easeInOut(p);
     const beatPhase = (((now - plan.beatOffset) / beat) % 1 + 1) % 1;
-    let zoom = seg.zoom === "in" ? 1 + 0.12 * p : seg.zoom === "out" ? 1.12 - 0.12 * p : 1.02;
+    let zoom = seg.zoom === "in" ? 1 + 0.12 * eased : seg.zoom === "out" ? 1.12 - 0.12 * eased : 1.02;
+    // 줌 펀치: 컷 순간 살짝 확대됐다가 빠르게 제자리로
+    if (seg.transition === "punch" && local < PUNCH_SECONDS) zoom *= 1 + 0.14 * (1 - local / PUNCH_SECONDS) ** 2;
+    // 벨로시티: 빠르게 → 느리게 → 빠르게 (재생 속도를 프레임마다 조절)
+    if (seg.velocity && alpha === 1) {
+      const target = Math.min(2, Math.max(0.4, seg.rate * (1.55 - 1.1 * Math.sin(Math.PI * p))));
+      if (Math.abs(video.playbackRate - target) > 0.04) video.playbackRate = target;
+    }
     if (style.effects.has("pulse") && seg.section === "drop") zoom += 0.04 * Math.exp(-beatPhase * 6);
     let dx = 0;
     let dy = 0;
@@ -190,7 +208,19 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     const h = vh * scale;
     ctx.save();
     if (supportsFilter) ctx.filter = GRADE_FILTER[style.grade];
-    if (video.readyState >= 2) ctx.drawImage(video, (W - w) / 2 + dx, (H - h) / 2 + dy, w, h);
+    ctx.globalAlpha = alpha;
+    if (video.readyState >= 2) {
+      const x = (W - w) / 2 + dx;
+      const y = (H - h) / 2 + dy;
+      ctx.drawImage(video, x, y, w, h);
+      // 휩: 컷 직후 가로로 번지는 잔상(모션 블러)
+      if (seg.transition === "whip" && local < WHIP_SECONDS) {
+        const strength = 1 - local / WHIP_SECONDS;
+        const dir = Math.round(seg.start * 10) % 2 ? 1 : -1;
+        ctx.globalAlpha = 0.22 * strength;
+        for (let k = 1; k <= 4; k++) ctx.drawImage(video, x + dir * k * 22 * strength, y, w, h);
+      }
+    }
     ctx.restore();
 
     if (seg.glitch && local < 0.4) {
@@ -318,14 +348,26 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
           let index = current < 0 ? 0 : current;
           while (index < plan.segments.length - 1 && now >= plan.segments[index + 1].start) index++;
           if (index !== current) {
-            if (current >= 0) pool[current % POOL_SIZE].pause();
+            // 크로스페이드로 넘어갈 때는 앞 컷을 잠깐 더 재생해 겹쳐 그립니다.
+            if (current >= 0 && plan.segments[index].transition !== "fade") pool[current % POOL_SIZE].pause();
+            previous = current;
             current = index;
             const video = pool[index % POOL_SIZE];
             void prepared[index]?.then(() => video.play().catch(() => undefined));
-            prepare(current + POOL_SIZE - 1);
+            prepare(current + LOOKAHEAD);
           }
           const seg = plan.segments[current];
-          drawVideo(seg, pool[current % POOL_SIZE], now);
+          const fading = seg.transition === "fade" && previous >= 0 && now - seg.start < FADE_SECONDS;
+          if (fading) {
+            drawVideo(plan.segments[previous], pool[previous % POOL_SIZE], now);
+            drawVideo(seg, pool[current % POOL_SIZE], now, Math.min(1, (now - seg.start) / FADE_SECONDS));
+          } else {
+            if (previous >= 0) {
+              pool[previous % POOL_SIZE].pause();
+              previous = -1;
+            }
+            drawVideo(seg, pool[current % POOL_SIZE], now);
+          }
           drawOverlays(seg, now);
         } else {
           pool.forEach(v => v.pause());

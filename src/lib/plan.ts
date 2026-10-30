@@ -19,6 +19,10 @@ export interface Segment {
   flash: boolean;
   glitch: boolean;
   shake: boolean;
+  /** 앞 컷에서 넘어오는 방식: 바로 컷 · 크로스페이드 · 휩(빠른 가로 흔들림) · 줌 펀치 */
+  transition: "cut" | "fade" | "whip" | "punch";
+  /** 벨로시티: 컷 안에서 빨라졌다 느려졌다 하는 속도 램프 */
+  velocity: boolean;
 }
 
 export interface EditPlan {
@@ -89,6 +93,21 @@ function fillSection(pattern: number[], totalBeats: number): number[] {
   return cuts;
 }
 
+/**
+ * 팬 에딧에서 흔히 쓰는 전환을 무드에 맞게 고릅니다.
+ * - 하이프: 드롭 컷마다 줌 펀치, 네 번째마다 휩
+ * - 감성: 전부 크로스페이드
+ * - 시네마틱: 인트로·아웃트로는 크로스페이드, 드롭은 세 번째마다 휩
+ * - 레트로: 드롭 세 번째마다 휩
+ */
+export function pickTransition(style: EditStyle, section: Section, dropIndex: number): Segment["transition"] {
+  if (style.mood === "emotional") return "fade";
+  if (style.mood === "cinematic") return section === "drop" ? (dropIndex % 3 === 2 ? "whip" : "cut") : "fade";
+  if (section !== "drop") return "cut";
+  if (style.mood === "hype") return dropIndex % 4 === 3 ? "whip" : "punch";
+  return dropIndex % 3 === 2 ? "whip" : "cut";
+}
+
 export function buildPlan(input: PlanInput): EditPlan {
   const { style } = input;
   const bpm = input.bpm ?? style.bpm;
@@ -152,6 +171,8 @@ export function buildPlan(input: PlanInput): EditPlan {
       flash: style.effects.has("flash") && (inDrop || section === "outro" || (i > 0 && sections[i - 1].section !== section)),
       glitch: style.effects.has("glitch") && inDrop && dropIndex % 4 === 3,
       shake: style.effects.has("shake") && inDrop,
+      transition: i === 0 ? "cut" : pickTransition(style, section, inDrop ? dropIndex : -1),
+      velocity: style.effects.has("velocity") && inDrop && beats >= 2 && rate === 1,
     });
     if (inDrop) dropIndex++;
     cursor += duration;

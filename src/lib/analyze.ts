@@ -126,12 +126,14 @@ export async function analyzeVideo(
   url: string,
   onProgress: (ratio: number) => void,
   signal?: AbortSignal,
-  maxSamples = DEFAULT_MAX_SAMPLES
+  maxSamples = DEFAULT_MAX_SAMPLES,
+  /** 장면 사이 최소 간격(초). 빠른 컷을 세려는 참고 에딧 분석은 더 촘촘하게 봅니다. */
+  minStep = 0.25
 ): Promise<VideoAnalysis> {
   const video = await loadVideo(url, signal);
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
   if (duration < 2) throw new Error("영상이 너무 짧아요.");
-  const step = Math.max(0.25, duration / maxSamples);
+  const step = Math.max(minStep, duration / maxSamples);
   const times: number[] = [];
   for (let t = 0; t < duration - 0.1; t += step) times.push(t);
 

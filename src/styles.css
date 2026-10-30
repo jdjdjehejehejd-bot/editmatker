@@ -116,6 +116,11 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .file input::file-selector-button { margin-right: 8px; border: 0; background: var(--soft); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer; }
 .file small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
+.learn { display: flex; flex-direction: column; gap: 8px; background: var(--soft); border-radius: 10px; padding: 10px 12px; }
+.toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
+.toggle input { width: 18px; height: 18px; accent-color: var(--blue); }
+.learned { margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
+.learned b { margin-right: 4px; background: var(--ig); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .chip { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 600; }
 .chip:hover:not(:disabled) { background: var(--soft); }
 

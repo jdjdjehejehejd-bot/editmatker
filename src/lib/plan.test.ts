@@ -67,3 +67,19 @@ describe("가중 섞기", () => {
     expect(order.filter(h => h.sourceId === "light")).toHaveLength(4);
   });
 });
+
+describe("자연스러운 전환", () => {
+  it("무드에 맞는 전환과 벨로시티를 고른다", async () => {
+    const { pickTransition } = await import("./plan");
+    const hype = parseStyle("신나는");
+    expect(pickTransition(hype, "drop", 0)).toBe("punch");
+    expect(pickTransition(hype, "drop", 3)).toBe("whip");
+    expect(pickTransition(hype, "intro", -1)).toBe("cut");
+    expect(pickTransition(parseStyle("잔잔한 감성"), "drop", 0)).toBe("fade");
+    expect(pickTransition(parseStyle("시네마틱"), "intro", -1)).toBe("fade");
+    const plan = buildPlan({ highlights, style: hype, totalSeconds: 30 });
+    expect(plan.segments[0].transition).toBe("cut");
+    expect(plan.segments.some(s => s.velocity)).toBe(true);
+    expect(plan.segments.filter(s => s.velocity).every(s => s.section === "drop" && s.rate === 1)).toBe(true);
+  });
+});

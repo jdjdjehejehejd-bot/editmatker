@@ -6,12 +6,14 @@ import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social"
 import { checkUserInput, isNsfwRequested, isTextAllowed } from "./lib/moderation";
 import { BUILTIN_PRESETS, loadPresets, matchesPreset, savePresets, upsertPreset, type Preset, type PresetSettings } from "./lib/presets";
 import { parseTopicInput, type TopicSpec } from "./lib/topic";
+import { describeProfile } from "./lib/learn";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle, type EditStyle } from "./lib/style";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "topic", label: "주제 해석" },
   { id: "search", label: "관련 영상 검색" },
+  { id: "learn", label: "참고 에딧 학습" },
   { id: "download", label: "영상 가져오기" },
   { id: "analyze", label: "하이라이트 분석" },
   { id: "plan", label: "비트 편집 구성" },
@@ -38,6 +40,8 @@ export default function App() {
   const [aspect, setAspect] = useState<Aspect>("9:16");
   const [sourceCount, setSourceCount] = useState(LIMITS.defaultSources);
   const [musicFile, setMusicFile] = useState<File | null>(null);
+  const [learnOnline, setLearnOnline] = useState(false);
+  const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
   const [run, setRun] = useState<RunSnapshot | null>(null);
@@ -157,7 +161,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -240,7 +244,9 @@ export default function App() {
   const colorOf = (id: string) => SOURCE_COLORS[Math.max(0, loaded.findIndex(s => s.id === id)) % SOURCE_COLORS.length];
   const isBlockedError = Boolean(error?.startsWith("생성 불가"));
   const reelTitle = result?.title ?? (shown.specs.map(spec => spec.term).join(" × ") || "editmatker");
-  const hashtags = [shown.style.label.split("·")[0], GRADE_LABEL[shown.style.grade], ...[...shown.style.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
+  // 다 만들었으면 실제로 쓴 스타일(참고 에딧에서 배운 값 포함), 아니면 만들기를 누른 순간의 스타일
+  const captionStyle = result?.style ?? shown.style;
+  const hashtags = [captionStyle.label.split("·")[0], GRADE_LABEL[captionStyle.grade], ...[...captionStyle.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
     .map(tag => `#${tag.replace(/\s+/g, "")}`)
     .join(" ");
   const barState = (i: number) => (status === "done" || i < stepIndex ? "done" : i === stepIndex && status === "running" ? "active" : i === stepIndex && status === "error" ? "failed" : "");
@@ -362,6 +368,20 @@ export default function App() {
                   <small>{musicFile ? musicFile.name : "비워 두면 자동 작곡"}</small>
                 </div>
               </label>
+            </div>
+
+            <div className="field">
+              <span>참고 에딧 · 스타일 배우기</span>
+              <div className="learn">
+                <label className="toggle">
+                  <input type="checkbox" checked={learnOnline} onChange={e => setLearnOnline(e.target.checked)} />
+                  <span>인터넷에서 "주제 edit" 찾아 배우기</span>
+                </label>
+                <label className="file">
+                  <input type="file" accept="video/*" multiple onChange={e => setReferenceFiles([...(e.target.files ?? [])].slice(0, 3))} />
+                  <small>{referenceFiles.length ? referenceFiles.map(f => f.name).join(", ") : "마음에 드는 에딧 영상을 올리면 컷 리듬·템포·색감을 따라 해요 (최대 3개)"}</small>
+                </label>
+              </div>
             </div>
 
             <div className="field">
@@ -487,6 +507,11 @@ export default function App() {
                 <strong>editmatker</strong> {reelTitle} 에딧 <span className="tags">{hashtags}</span>
               </p>
               {statusText && status !== "running" && <p className="status-line">{statusText}</p>}
+              {result?.profile && (
+                <p className="learned">
+                  <b>배운 스타일</b> {describeProfile(result.profile)} · 컷 {result.profile.cuts}개 분석{result.profile.grade ? ` · ${GRADE_LABEL[result.profile.grade]}` : ""}
+                </p>
+              )}
               {queries.length > 0 && (
                 <div className="queries">
                   {queries.map(group => (

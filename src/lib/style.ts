@@ -4,7 +4,7 @@ import { isNsfwRequested } from "./moderation";
 
 export type Mood = "hype" | "cinematic" | "emotional" | "retro";
 export type Grade = "natural" | "warm" | "cool" | "mono" | "vivid" | "teal-orange";
-export type Effect = "flash" | "shake" | "zoom" | "glitch" | "slowmo" | "grain" | "letterbox" | "pulse";
+export type Effect = "flash" | "shake" | "zoom" | "glitch" | "slowmo" | "grain" | "letterbox" | "pulse" | "velocity";
 
 export interface EditStyle {
   mood: Mood;
@@ -31,7 +31,7 @@ const MOOD_PRESETS: Record<Mood, Omit<EditStyle, "mood" | "grade" | "effects" | 
   hype: {
     bpm: 140,
     grade: "vivid",
-    effects: ["flash", "shake", "pulse", "zoom"],
+    effects: ["flash", "shake", "pulse", "zoom", "velocity"],
     cutBeats: { intro: [4, 4], drop: [2, 1, 1, 2, 2, 1, 1, 4], outro: [4] },
     weights: { motion: 1, audio: 0.7, color: 0.35, stability: 0 },
     label: "하이프 · 빠른 비트 컷",
@@ -80,6 +80,7 @@ const EFFECT_KEYWORDS: [Effect, RegExp][] = [
   ["grain", /그레인|필름|grain/i],
   ["letterbox", /레터박스|시네마스코프|letterbox/i],
   ["pulse", /펄스|비트에 맞|박자|pulse|beat/i],
+  ["velocity", /벨로시티|속도 ?변화|스피드 ?램프|velocity|speed ?ramp/i],
 ];
 
 // 한국어 특징 단어를 Commons 검색에 쓸 수 있는 영어 키워드로 옮깁니다.
@@ -168,4 +169,5 @@ export const EFFECT_LABEL: Record<Effect, string> = {
   grain: "필름 그레인",
   letterbox: "레터박스",
   pulse: "비트 펄스",
+  velocity: "벨로시티",
 };
