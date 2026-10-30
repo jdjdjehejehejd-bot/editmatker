@@ -182,3 +182,15 @@ describe("주제 나누기 기호", () => {
     expect(terms("AC/DC, Tom & Jerry")).toEqual(["AC/DC", "Tom & Jerry"]);
   });
 });
+
+describe("스포츠 판단 넓히기", () => {
+  it("종목·리그·단체 주제와 경기 영상 제목", async () => {
+    const { isSportsEntity, mentionsSports } = await import("./topic");
+    expect(isSportsEntity({ descriptions: { en: { value: "team sport played with a ball" } } })).toBe(true);
+    expect(isSportsEntity({ descriptions: { en: { value: "American mixed martial arts promotion" } } })).toBe(true);
+    expect(isSportsEntity({ descriptions: { ko: { value: "잉글랜드의 프로 축구 리그" } } })).toBe(true);
+    expect(isSportsEntity({ descriptions: { en: { value: "capital city of Japan" } } })).toBe(false);
+    expect(mentionsSports("Brazil vs Argentina | World Cup Highlights")).toBe(true);
+    expect(mentionsSports("Tokyo night walk 4K")).toBe(false);
+  });
+});

@@ -274,7 +274,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   interface Prepared {
     url: string;
     analysis: VideoAnalysis;
-    verdict: { blocked: boolean; reason: string | null };
+    verdict: { blocked: boolean; reason: string | null; certain?: boolean };
   }
   interface Job {
     topic: TopicResult;
@@ -286,6 +286,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   let current: Job | null = null;
   const onAbort = () => queues.forEach(queue => queue.forEach(job => job.controller.abort()));
   signal.addEventListener("abort", onAbort);
+
+  /** 이 영상을 스포츠 기준(맨살·몸싸움 오탐 완화)으로 볼지: 주제·특징 문장·영상 제목과 태그 중 하나라도 경기 관련이면 */
+  const featureSports = mentionsSports(input.features);
+  const isSportsJob = (job: Job) => Boolean(job.topic.info.sports || featureSports || mentionsSports([job.candidate.title, job.candidate.tags].filter(Boolean).join(" ")));
 
   /** 영상 하나를 받아 분석하고 장면을 검사합니다. 공유 상태는 건드리지 않습니다(판정은 꺼낼 때). */
   const prepare = async (job: Job): Promise<Prepared> => {
@@ -303,7 +307,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
       if (!policy.nsfw) report("analyze", `${candidate.title} 장면 검열 중`);
       // 스포츠 선수 주제는 경기 중 노출(상의 탈의 등)을 선정성으로 보지 않습니다.
-      const verdict = await screenFrames(analysis.keyframes, { ...policy, sports: job.topic.info.sports || mentionsSports(input.features) });
+      // 영상 제목·태그가 경기 영상이면(예: 주제는 도시인데 영상은 그 도시 팀 경기) 그 영상도 스포츠 기준으로 봅니다.
+      const verdict = await screenFrames(analysis.keyframes, { ...policy, sports: isSportsJob(job) });
       analysis.keyframes = [];
       return { url, analysis, verdict };
     } catch (error) {
@@ -349,8 +354,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         const tally = screening.get(topic)!;
         tally.checked++;
         if (verdict.blocked) {
-          tally.blocked++;
           // 받아 본 영상 중 상당수에서 부적절한 장면이 나오면 주제 자체를 막습니다.
+          // 스포츠 영상은 오탐이 많아서, 확실한 장면이 나온 영상만 주제 전체 차단에 셉니다(나머지는 그 영상만 뺌).
+          if (!isSportsJob(job) || verdict.certain) tally.blocked++;
           if (shouldBlockTopic(tally.blocked, tally.checked)) {
             throw new GenerationBlockedError(`생성 불가 — "${topic.info.query}" 영상 ${tally.checked}개 중 ${tally.blocked}개에서 부적절한 장면이 감지됐어요.`);
           }
