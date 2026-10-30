@@ -112,3 +112,12 @@ describe("스톡 프록시", () => {
     expect(mixkitSlug("서울")).toBeNull();
   });
 });
+
+describe("Internet Archive 프록시", () => {
+  it("archive.org 다운로드 주소만 허용", async () => {
+    const { isArchiveMediaUrl } = await import("../../api/_stock");
+    expect(isArchiveMediaUrl("https://archive.org/download/film1/film1.mp4")).toBe(true);
+    expect(isArchiveMediaUrl("https://archive.org/details/film1")).toBe(false);
+    expect(isArchiveMediaUrl("https://archive.org.evil.example/download/a.mp4")).toBe(false);
+  });
+});

@@ -3,7 +3,7 @@
 // 허용되는 라이선스(Commons·Internet Archive·스톡)만으로 좁힐 수 있습니다.
 
 import { LIMITS } from "./device";
-import { searchReddit, searchYouTube } from "./social";
+import { proxyBase, searchReddit, searchYouTube } from "./social";
 import { searchStock, type StockKeys } from "./stock";
 import { topicNames, type TopicInfo } from "./topic";
 
@@ -306,6 +306,8 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
 
 const ARCHIVE_VIDEO: Record<string, string> = { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", ogv: "video/ogg" };
 
+const isPrivateFile = (file: any) => file?.private === true || file?.private === "true";
+
 export function pickArchiveFile(files: any[], canPlay: CanPlay = defaultCanPlay): { name: string; bytes: number | null; duration: number | null } | null {
   return inspectArchiveFiles(files, canPlay).file;
 }
@@ -318,8 +320,10 @@ export function inspectArchiveFiles(files: any[], canPlay: CanPlay = defaultCanP
   const extension = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
   const videos = (Array.isArray(files) ? files : [])
     .filter(f => typeof f?.name === "string" && ARCHIVE_VIDEO[extension(f.name)])
+    // 비공개 파일(private)은 로그인해야 받을 수 있어 브라우저에서는 접속 오류로만 보입니다.
+    .filter(f => !isPrivateFile(f))
     .map(f => ({ name: String(f.name), mime: ARCHIVE_VIDEO[extension(f.name)], bytes: Number(f.size) || null, duration: parseLength(f.length) }));
-  if (!videos.length) return { file: null, reason: REASON.noVideo };
+  if (!videos.length) return { file: null, reason: (Array.isArray(files) ? files : []).some(f => typeof f?.name === "string" && ARCHIVE_VIDEO[extension(f.name)]) ? REASON.restricted : REASON.noVideo };
   const playable = videos.filter(f => canPlay(f.mime));
   if (!playable.length) return { file: null, reason: REASON.format };
   const fitting = playable.filter(f => f.duration === null || (f.duration >= MIN_DURATION && f.duration <= MAX_ARCHIVE_DURATION));
@@ -385,6 +389,7 @@ async function archiveQuery(q: string, limit: number, base: number, mode: Licens
         return null;
       }
       const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator;
+      const mediaUrl = `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${file.name.split("/").map(encodeURIComponent).join("/")}`;
       return {
         id: `archive:${doc.identifier}`,
         provider: "Internet Archive",
@@ -394,7 +399,9 @@ async function archiveQuery(q: string, limit: number, base: number, mode: Licens
         licenseUrl: license.licenseUrl,
         reusable: license.reusable,
         pageUrl: `https://archive.org/details/${encodeURIComponent(doc.identifier)}`,
-        mediaUrl: `https://archive.org/download/${encodeURIComponent(doc.identifier)}/${file.name.split("/").map(encodeURIComponent).join("/")}`,
+        mediaUrl,
+        // 브라우저가 Internet Archive에서 직접 못 받으면(CORS·리디렉션 오류) 같은 사이트의 /api/media 프록시로 다시 시도합니다.
+        fallbackUrl: `${proxyBase()}/api/media?url=${encodeURIComponent(mediaUrl)}`,
         poster: `https://archive.org/services/img/${encodeURIComponent(doc.identifier)}`,
         duration: file.duration,
         bytes: file.bytes,
