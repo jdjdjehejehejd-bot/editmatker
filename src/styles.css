@@ -86,6 +86,9 @@ input[type="range"] { accent-color: var(--accent); }
 .steps li.failed .dot { border-color: #e05050; background: #e05050; }
 .bar { height: 4px; background: var(--panel-2); border-radius: 4px; margin-top: 6px; overflow: hidden; }
 .bar i { display: block; height: 100%; background: var(--accent); transition: width 0.2s linear; }
+.queries { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin-top: 14px; font-size: 12px; }
+.queries span { color: var(--muted); margin-right: 2px; }
+.queries em { font-style: normal; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; padding: 3px 8px; }
 .error { white-space: pre-line; color: #ff8f7a; background: #ff5a3c18; border-radius: 10px; padding: 11px 13px; font-size: 13px; margin: 16px 0 0; line-height: 1.5; }
 
 @keyframes pulse { 50% { box-shadow: 0 0 0 7px transparent; } }

@@ -6,7 +6,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { socialQueries } from "./social";
+import { expandQueries } from "./topic";
 import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
@@ -42,6 +42,7 @@ export interface PipelineResult {
 export interface PipelineEvents {
   step: (id: StepId, detail: string, ratio?: number) => void;
   candidates: (sources: SourceVideo[]) => void;
+  queries: (queries: string[]) => void;
   loaded: (source: LoadedSource) => void;
   skipped: (source: SourceVideo, reason: string) => void;
 }
@@ -53,8 +54,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const topic = await resolveTopic(input.topic, signal);
 
   const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
-  const queries = input.licenseMode === "any" ? socialQueries(topic, style.searchHints) : [topic.englishLabel ?? topic.label];
-  events.step("search", `${where}에서 찾는 중 · ${queries.map(q => `"${q}"`).join(", ")}`);
+  const queries = input.licenseMode === "any" ? expandQueries(topic, style.searchHints).map(q => q.q) : [topic.englishLabel ?? topic.label, ...(topic.related ?? []).slice(0, 3)];
+  events.queries(queries);
+  events.step("search", `${where}에서 ${queries.length}가지 검색어로 찾는 중`);
   const { sources: candidates, reports } = await findSources(topic, style.searchHints, input.licenseMode, input.helper, signal);
   events.candidates(candidates);
   if (!candidates.length) {

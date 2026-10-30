@@ -1,7 +1,8 @@
 // YouTube·Reddit 검색. YouTube 영상은 로컬 도우미(helper/server.mjs)를 거쳐야 받을 수 있고,
 // Reddit은 도우미가 없으면 브라우저에서 직접 검색해 소리 없는 영상 파일을 씁니다.
 
-import { describeError, type SearchStats, type SourceVideo, type TopicInfo } from "./sources";
+import { describeError, type SearchStats, type SourceVideo } from "./sources";
+import { expandQueries, type SearchQuery, type TopicInfo } from "./topic";
 
 export const DEFAULT_HELPER = "http://localhost:8787";
 const MIN_DURATION = 3;
@@ -91,23 +92,23 @@ function youtubeSource(id: string, title: string, channel: string, duration: num
 }
 
 /** 도우미의 /api/youtube/search 응답을 영상 목록으로 바꿉니다. */
-export function parseYouTubeSearch(data: any, helper: string): SourceVideo[] {
+export function parseYouTubeSearch(data: any, helper: string, offset = 0): SourceVideo[] {
   const entries: any[] = Array.isArray(data?.entries) ? data.entries : [];
   return entries.flatMap((e, i) => {
     if (typeof e?.id !== "string" || e.live) return [];
     const duration = Number(e.duration) || null;
     if (!inRange(duration)) return [];
-    return [youtubeSource(e.id, String(e.title ?? "제목 없음").slice(0, 200), String(e.channel ?? ""), duration, e.thumbnail ?? null, helper, 4 - i * 0.05)];
+    return [youtubeSource(e.id, String(e.title ?? "제목 없음").slice(0, 200), String(e.channel ?? ""), duration, e.thumbnail ?? null, helper, 4 + offset - i * 0.05)];
   });
 }
 
 /** Reddit search.json 응답에서 영상 게시물(Reddit 업로드 영상, YouTube 링크)을 고릅니다. */
-export function parseRedditSearch(data: any, helper: string | null): SourceVideo[] {
+export function parseRedditSearch(data: any, helper: string | null, offset = 0): SourceVideo[] {
   const posts: any[] = (data?.data?.children ?? []).map((child: any) => child?.data).filter(Boolean);
   const sources: SourceVideo[] = [];
   posts.forEach((post, i) => {
     if (post.over_18 || typeof post.permalink !== "string") return;
-    const relevance = 3.9 - i * 0.05;
+    const relevance = 3.9 + offset - i * 0.05;
     const title = String(post.title ?? "제목 없음").slice(0, 200);
     const video = post.secure_media?.reddit_video ?? post.media?.reddit_video;
     if (post.is_video && video) {
@@ -144,21 +145,13 @@ export function parseRedditSearch(data: any, helper: string | null): SourceVideo
   return sources;
 }
 
-const HANGUL = /[\uac00-\ud7a3]/;
-
-/**
- * 한국어와 영어로 각각 검색할 검색어를 만듭니다.
- * 한국어 이름은 그대로, 영어 이름(Wikidata)에는 특징에서 뽑은 영어 키워드를 붙입니다.
- */
-export function socialQueries(topic: TopicInfo, hints: string[]): string[] {
-  const korean = [topic.query, topic.label].find(name => HANGUL.test(name));
-  const english = topic.englishLabel ?? (HANGUL.test(topic.query) ? null : topic.query);
-  const queries = [korean, english ? [english, ...hints].join(" ") : null].filter((q): q is string => Boolean(q?.trim()));
-  return [...new Set(queries.map(q => q.trim()))];
+/** 여러 검색어 결과를 합칩니다. 일부만 실패하면 나머지 결과를 쓰고, 모두 실패하면 첫 오류를 냅니다. */
+/** 넓힌 검색어일수록 관련도를 낮춥니다 (가중치 1 → 0, 0.6 → -0.8). */
+function weightOffset(query: SearchQuery) {
+  return (query.weight - 1) * 2;
 }
 
-/** 여러 검색어 결과를 합칩니다. 일부만 실패하면 나머지 결과를 쓰고, 모두 실패하면 첫 오류를 냅니다. */
-async function searchAll(queries: string[], search: (q: string) => Promise<SourceVideo[]>, signal?: AbortSignal): Promise<SourceVideo[]> {
+async function searchAll(queries: SearchQuery[], search: (query: SearchQuery) => Promise<SourceVideo[]>, signal?: AbortSignal): Promise<SourceVideo[]> {
   const results = await Promise.allSettled(queries.map(search));
   if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
   const ok = results.filter((r): r is PromiseFulfilledResult<SourceVideo[]> => r.status === "fulfilled");
@@ -174,11 +167,11 @@ async function searchAll(queries: string[], search: (q: string) => Promise<Sourc
 
 export async function searchYouTube(topic: TopicInfo, hints: string[], helper: string, signal?: AbortSignal): Promise<SourceVideo[]> {
   return searchAll(
-    socialQueries(topic, hints),
-    async q => {
-      const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(q)}&limit=12`, { signal });
+    expandQueries(topic, hints),
+    async query => {
+      const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=${query.weight < 1 ? 6 : 12}`, { signal });
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `YouTube 검색 실패 (${response.status})`);
-      return parseYouTubeSearch(await response.json(), helper);
+      return parseYouTubeSearch(await response.json(), helper, weightOffset(query));
     },
     signal
   );
@@ -201,14 +194,15 @@ async function fetchJson(url: string, signal?: AbortSignal) {
  * 그것도 막히면 Vercel 함수 프록시를 거칩니다.
  */
 export async function searchReddit(topic: TopicInfo, hints: string[], helper: string | null, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
-  return searchAll(socialQueries(topic, hints), q => searchRedditOnce(q, helper, signal, stats), signal);
+  return searchAll(expandQueries(topic, hints), query => searchRedditOnce(query, helper, signal, stats), signal);
 }
 
 function countPosts(data: any) {
   return Array.isArray(data?.data?.children) ? data.data.children.length : 0;
 }
 
-async function searchRedditOnce(q: string, helper: string | null, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
+async function searchRedditOnce(query: SearchQuery, helper: string | null, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
+  const q = query.q;
   let data: unknown;
   if (helper) {
     data = await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=50`, signal);
@@ -227,5 +221,5 @@ async function searchRedditOnce(q: string, helper: string | null, signal?: Abort
     }
   }
   if (stats) stats.scanned += countPosts(data);
-  return parseRedditSearch(data, helper);
+  return parseRedditSearch(data, helper, weightOffset(query));
 }

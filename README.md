@@ -12,7 +12,11 @@
 
 ## 작동 방식
 
-1. **주제 해석** — Wikidata에서 주제를 찾아 영어 이름, Commons 분류, 대표 영상 파일을 얻습니다. 한국어로 입력해도 됩니다.
+1. **주제 해석과 검색어 확장** — Wikidata에서 주제를 찾아(못 찾으면 한국어·영어 Wikipedia 검색으로 다시 찾음) 입력값 하나가 아니라 여러 검색어를 만듭니다.
+   - 한국어 이름과 영어 이름 (+ 특징에서 뽑은 영어 키워드)
+   - 다른 이름(별칭) — 예: `Sonny`, `쏘니`
+   - 관련 주제 — Wikidata의 소속 팀·그룹·구성원·종목·장르·대표작 등과 Wikipedia의 비슷한 문서
+   - 화면에 실제로 쓴 검색어가 표시되고, 넓힌 검색어로 찾은 영상일수록 뒤로 밀립니다.
 2. **영상 검색** — 영상 라이선스 선택에 따라 찾는 곳이 달라집니다.
    - **모든 공개 영상**(기본): **YouTube**와 **Reddit**(Reddit에 올라온 영상과 공유된 YouTube 링크)을 **한국어와 영어로 함께** 검색해(예: `손흥민` + `Son Heung-min goal`, 영어 이름은 Wikidata에서 가져옴) 먼저 찾고, Wikimedia Commons·Internet Archive로 보충합니다. 라이선스와 관계없이 쓰므로 영상마다 "재사용 허가 확인 필요" 표시가 붙습니다.
    - **재사용 가능만**: Wikimedia Commons·Internet Archive에서 2차 편집이 허용되는 **Public domain · CC0 · CC BY · CC BY-SA** 영상만 씁니다.
@@ -77,7 +81,8 @@ Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배�
 ### 구조
 
 - `src/lib/style.ts` — 특징 문장 → 무드·BPM·색감·효과·검색 힌트
-- `src/lib/sources.ts` — Wikidata 주제 해석, Commons · Internet Archive 검색, 라이선스 판정, 출처 통합·정렬, 다운로드
+- `src/lib/topic.ts` — Wikidata·Wikipedia 주제 해석, 별칭·관련 주제로 검색어 확장
+- `src/lib/sources.ts` — Commons · Internet Archive 검색, 라이선스 판정, 출처 통합·정렬, 다운로드
 - `src/lib/social.ts` — YouTube · Reddit 검색과 로컬 도우미 연결
 - `src/lib/device.ts` — 휴대폰 한도, iOS 오디오 잠금 해제, 화면 켜짐 유지, 공유
 - `api/reddit.ts`, `api/media.ts` — Reddit 검색·영상 프록시 (Vercel 함수)

@@ -39,6 +39,7 @@ export default function App() {
   const [step, setStep] = useState<{ id: StepId; detail: string; ratio?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<SourceVideo[]>([]);
+  const [queries, setQueries] = useState<string[]>([]);
   const [loaded, setLoaded] = useState<LoadedSource[]>([]);
   const [skipped, setSkipped] = useState<{ title: string; reason: string }[]>([]);
   const [result, setResult] = useState<PipelineResult | null>(null);
@@ -72,6 +73,7 @@ export default function App() {
     loaded.forEach(s => URL.revokeObjectURL(s.url));
     if (output) URL.revokeObjectURL(output.url);
     setCandidates([]);
+    setQueries([]);
     setLoaded([]);
     setSkipped([]);
     setResult(null);
@@ -97,6 +99,7 @@ export default function App() {
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
+          queries: setQueries,
           loaded: source => setLoaded(list => [...list, source]),
           skipped: (source, reason) => setSkipped(list => [...list, { title: source.title, reason }]),
         },
@@ -314,6 +317,14 @@ export default function App() {
               </li>
             ))}
           </ol>
+          {queries.length > 0 && (
+            <div className="queries">
+              <span>검색어</span>
+              {queries.map(q => (
+                <em key={q}>{q}</em>
+              ))}
+            </div>
+          )}
           {error && <p className="error">{error}</p>}
         </section>
 
