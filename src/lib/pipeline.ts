@@ -7,6 +7,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
+import { inferTopic, type InferredTopic } from "./vision";
 import { downloadTrack, findFreeMusic, trackCredit, type FreeTrack } from "./freemusic";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
@@ -90,6 +91,8 @@ export interface PipelineResult {
   profile: StyleProfile | null;
   /** 무료 음악 사이트에서 가져온 곡 (자동 작곡·내 음악이면 없음) */
   track?: FreeTrack;
+  /** 주제를 비웠을 때 올린 영상을 보고 고른 주제 */
+  inferredTopic?: InferredTopic;
   topicSummary: TopicSummary[];
 }
 
@@ -121,12 +124,32 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   if (blocked) throw new GenerationBlockedError(blocked);
   // 분위기를 직접 골랐으면 그 분위기로 읽고, 나머지 직접 설정은 참고 에딧 학습 뒤에 덮어씁니다(직접 설정이 우선).
   let style = parseStyle(input.features, { mood: input.styleOverrides?.mood });
-  const specs = parseTopicInput(input.topic);
+  // 속도: 장면 검열 모델은 어차피 쓰므로 주제 해석·검색과 동시에 미리 받습니다(NSFW 모드면 받지 않음).
+  preloadClassifier(policy);
+  let specs = parseTopicInput(input.topic);
   const uploads = (input.uploadFiles ?? []).slice(0, MAX_UPLOADS);
   if (!specs.length && !uploads.length) throw new Error("주제를 입력하거나 편집할 영상을 올려 주세요.");
+  // 주제 없이 영상만 올렸으면 올린 영상(파일 이름 → 장면)을 보고 비슷한 주제를 고릅니다.
+  // 고른 주제로 비슷한 영상을 찾아 섞고("올린 영상만 편집"이면 찾지 않음), 제목·장면 판단·스타일 학습에도 씁니다.
+  let inferred: InferredTopic | null = null;
+  if (!specs.length) {
+    events.step("topic", "올린 영상을 보고 비슷한 주제를 고르는 중");
+    inferred = await inferTopic(uploads, signal).catch(error => {
+      if (signal.aborted) throw error;
+      return null;
+    });
+    if (inferred && !checkUserInput(inferred.term, "")) specs = [{ term: inferred.term, weight: 1 }];
+    else inferred = null;
+  }
 
   if (specs.length) events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
+  // 장면으로 고른 주제는 우리말 이름("강아지")을 제목에 쓰고, Wikidata 이름("개")은 다른 이름으로 남겨 검색·관련성에 씁니다.
+  if (inferred?.source === "vision" && infos[0]) {
+    const info = infos[0];
+    if (info.label !== inferred.label) info.aliases = [...new Set([info.label, ...(info.aliases ?? [])])];
+    info.label = inferred.label;
+  }
   // 검열: 주제가 가리키는 대상(영어 이름, 설명)이 부적절하면 생성하지 않습니다.
   const badTopic = infos.find(info => !isTopicAllowed(info, policy));
   if (badTopic) throw new GenerationBlockedError(`생성 불가 — 주제 "${badTopic.query}"는 검열 대상이에요.`);
@@ -233,8 +256,6 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const failures: string[] = searching ? topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`) : [];
   if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
   if (irrelevant) failures.push(`관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외`);
-  // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다(NSFW 모드에서는 받지 않음).
-  preloadClassifier(policy);
 
   // 속도: 참고 에딧 학습과 내 음악 분석은 원본 영상 받기·분석과 동시에 진행합니다.
   // 원본 영상 분석은 배운 스타일과 무관하고, 배운 값(템포·컷 리듬)은 하이라이트를 고를 때(꺼낼 때) 반영하므로 결과는 같습니다.
@@ -519,7 +540,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     }
     return { label: t.info.label, weight: t.weight, used, note };
   });
-  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track };
+  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined };
 }
 
 /** 참고 에딧(올린 파일 + 인터넷에서 찾은 에딧, 합쳐 최대 3개)을 분석해 스타일 프로필을 만듭니다. 실패해도 생성은 계속합니다. */
