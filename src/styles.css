@@ -43,19 +43,31 @@ a { color: inherit; }
 
 .feed { max-width: 1000px; margin: 0 auto; padding: 18px 20px 48px; }
 
-/* 스토리 */
-.stories { display: flex; gap: 16px; overflow-x: auto; padding: 14px 16px; margin-bottom: 18px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); scrollbar-width: none; }
+/* 스토리 — 프리셋 */
+.stories { display: flex; gap: 14px; overflow-x: auto; padding: 14px 16px; margin-bottom: 18px; background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); scrollbar-width: none; }
 .stories::-webkit-scrollbar { display: none; }
-.story { flex: 0 0 auto; width: 72px; display: flex; flex-direction: column; align-items: center; gap: 5px; position: relative; background: none; border: 0; padding: 0; text-align: center; }
-.story .ring { width: 66px; height: 66px; border-radius: 50%; padding: 2.5px; background: var(--ig); display: grid; place-items: center; transition: transform 0.15s; }
-.story .ring.muted { background: var(--line); }
-.story.example:hover .ring { transform: scale(1.05); background: var(--ig); }
-.story.empty .ring, .story.blocked .ring { background: var(--line); }
-.story.blocked small { color: var(--danger); }
+.story { flex: 0 0 auto; width: 72px; position: relative; display: flex; flex-direction: column; align-items: center; gap: 5px; background: none; border: 0; padding: 0; text-align: center; }
+.story-hit { display: contents; background: none; border: 0; padding: 0; font: inherit; color: inherit; cursor: pointer; }
+.story .ring { width: 66px; height: 66px; border-radius: 50%; padding: 2.5px; background: var(--line); display: grid; place-items: center; transition: transform 0.15s, background 0.2s; }
+.story:hover .ring { transform: scale(1.04); }
+.story.active .ring { background: var(--ig); }
 .story .avatar { width: 100%; height: 100%; border-radius: 50%; border: 3px solid #fff; background: var(--ig-soft); display: grid; place-items: center; font-size: 22px; font-weight: 700; color: var(--ink-2); }
+.story.add .ring { background: none; padding: 0; }
+.story.add .avatar { border: 1.5px dashed #c7c7c7; background: var(--soft); font-size: 28px; font-weight: 400; color: var(--ink-2); }
+.story.add:disabled { opacity: 0.45; }
 .story small { width: 100%; font-size: 12px; color: var(--ink); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.story.example small { color: var(--muted); }
-.story b { position: absolute; top: 46px; left: 50%; transform: translateX(-50%); background: var(--blue); color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; border: 2px solid #fff; }
+.story.active small { font-weight: 600; }
+.story-remove {
+  position: absolute; top: 0; right: 0; width: 22px; height: 22px; border-radius: 50%; border: 2px solid #fff; background: var(--ink); color: #fff;
+  font-size: 13px; line-height: 1; display: grid; place-items: center; padding: 0 0 1px; opacity: 0; transition: opacity 0.15s;
+}
+.story:hover .story-remove, .story-remove:focus-visible { opacity: 1; }
+@media (hover: none) { .story-remove { opacity: 1; } }
+
+.topic-chips { display: flex; flex-wrap: wrap; gap: 6px; margin: -6px 0 14px; font-size: 12px; }
+.topic-chips span { background: var(--soft); border-radius: 999px; padding: 4px 10px; }
+.topic-chips b { margin-left: 5px; font-weight: 700; color: var(--blue); }
+.topic-chips .blocked { color: var(--danger); text-decoration: line-through; }
 
 /* 카드 */
 .columns { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 470px); gap: 24px; align-items: start; }

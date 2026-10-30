@@ -1,13 +1,13 @@
 // 주제 → 영상 검색 → 다운로드 → 하이라이트 분석 → 편집 계획까지의 전체 흐름입니다.
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
-import { LIMITS } from "./device";
+import { isMobile, LIMITS } from "./device";
 import { checkUserInput, GenerationBlockedError, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { allocateSlots, combinedTitle, expandQueries, matchesTopic, parseTopicInput } from "./topic";
+import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, parseTopicInput } from "./topic";
 import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
@@ -101,6 +101,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const topics: TopicResult[] = infos.map((info, i) => {
     // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
     // NSFW 모드에서는 성적 단어와 성인물 표시를 걸러내지 않습니다.
+    const matches = createTopicMatcher(info);
     const flagged = found[i].sources.filter(source => (!policy.nsfw && source.nsfw) || !isTextAllowedWith(policy, source.title, source.author, source.tags));
     // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
     if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
@@ -117,7 +118,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         return false;
       }
       // 관련성: 제목·태그·채널에 주제 이름이 나오는 영상(또는 주제의 Commons 분류·대표 영상)만 씁니다.
-      if (!source.trusted && !matchesTopic([source.title, source.tags, source.author].filter(Boolean).join(" "), info)) {
+      if (!source.trusted && !matches([source.title, source.tags, source.author].filter(Boolean).join(" "))) {
         irrelevant++;
         return false;
       }
@@ -159,72 +160,144 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const screening = new Map<TopicResult, { checked: number; blocked: number }>(active.map(t => [t, { checked: 0, blocked: 0 }]));
   const cursor = new Map<TopicResult, number>(active.map(t => [t, 0]));
 
-  const tryNext = async (topic: TopicResult, perSource: number): Promise<boolean> => {
-    let index = cursor.get(topic)!;
-    while (index < topic.candidates.length) {
-      const candidate = topic.candidates[index++];
-      cursor.set(topic, index);
+  // 속도: 지금 영상을 쓰는 동안 다음 후보도 미리 받아 분석해 둡니다(휴대폰은 1개, PC는 2개 앞까지).
+  // 결과는 원래 순서대로 하나씩 꺼내 판정하므로, 어떤 영상이 쓰이는지는 미리 받지 않을 때와 같습니다.
+  const lookahead = isMobile ? 1 : 2;
+  interface Prepared {
+    url: string;
+    analysis: VideoAnalysis;
+    verdict: { blocked: boolean; reason: string | null };
+  }
+  interface Job {
+    candidate: SourceVideo;
+    controller: AbortController;
+    promise: Promise<Prepared>;
+  }
+  const queues = new Map<TopicResult, Job[]>(active.map(t => [t, []]));
+  let current: Job | null = null;
+  const onAbort = () => queues.forEach(queue => queue.forEach(job => job.controller.abort()));
+  signal.addEventListener("abort", onAbort);
+
+  /** 영상 하나를 받아 분석하고 장면을 검사합니다. 공유 상태는 건드리지 않습니다(판정은 꺼낼 때). */
+  const prepare = async (job: Job): Promise<Prepared> => {
+    const { candidate, controller } = job;
+    const report = (id: StepId, detail: string, ratio?: number) => {
+      if (current === job) events.step(id, detail, ratio);
+    };
+    const label = () => `${loaded.length + 1}/${slots} · ${candidate.title}`;
+    report("download", label(), 0);
+    const blob = await downloadSource(candidate, ratio => report("download", label(), ratio), controller.signal, LIMITS.sourceBytes);
+    const url = URL.createObjectURL(blob);
+    try {
+      report("analyze", `${candidate.title} 장면 분석 중`, 0);
+      const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples);
+      // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
+      if (!policy.nsfw) report("analyze", `${candidate.title} 장면 검열 중`);
+      const verdict = await screenFrames(analysis.keyframes, policy);
+      analysis.keyframes = [];
+      return { url, analysis, verdict };
+    } catch (error) {
+      URL.revokeObjectURL(url);
+      throw error;
+    }
+  };
+
+  /** 필요한 만큼만(남은 칸 수, 최대 lookahead+1개) 미리 시작합니다 — 쓰지 않을 영상을 받느라 데이터를 낭비하지 않게. */
+  const enqueue = (topic: TopicResult, want: number) => {
+    const queue = queues.get(topic)!;
+    while (queue.length < Math.min(lookahead + 1, want)) {
+      const index = cursor.get(topic)!;
+      if (index >= topic.candidates.length) return;
+      cursor.set(topic, index + 1);
+      const controller = new AbortController();
+      const job: Job = { candidate: topic.candidates[index], controller, promise: Promise.resolve(null as never) };
+      job.promise = prepare(job);
+      job.promise.catch(() => undefined); // 꺼내기 전에 실패해도 처리되지 않은 오류로 남지 않게
+      queue.push(job);
+    }
+  };
+
+  /** `want`: 이 주제에서 앞으로 더 필요한 영상 수 (미리 받기 상한) */
+  const tryNext = async (topic: TopicResult, perSource: number, want: number): Promise<boolean> => {
+    const queue = queues.get(topic)!;
+    for (;;) {
+      enqueue(topic, Math.max(1, want));
+      const job = queue.shift();
+      if (!job) return false;
+      // 꺼낸 영상이 쓰인다고 보고, 그다음에 필요한 만큼만 미리 시작합니다.
+      enqueue(topic, want - 1);
       if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-      const label = `${loaded.length + 1}/${slots} · ${candidate.title}`;
+      const { candidate } = job;
+      current = job;
+      // 미리 받아 둔 영상이면 진행 상황 표시가 건너뛰어졌으므로 지금 단계를 한 번 알려 줍니다.
+      events.step("download", `${loaded.length + 1}/${slots} · ${candidate.title}`);
+      let url: string | null = null;
       try {
-        events.step("download", label, 0);
-        const blob = await downloadSource(candidate, ratio => events.step("download", label, ratio), signal, LIMITS.sourceBytes);
-        const url = URL.createObjectURL(blob);
-        try {
-          events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
-          const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
-          // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
-          if (!policy.nsfw) events.step("analyze", `${candidate.title} 장면 검열 중`);
-          const verdict = await screenFrames(analysis.keyframes, policy);
-          analysis.keyframes = [];
-          const tally = screening.get(topic)!;
-          tally.checked++;
-          if (verdict.blocked) {
-            tally.blocked++;
-            // 받아 본 영상 중 상당수에서 부적절한 장면이 나오면 주제 자체를 막습니다.
-            if (shouldBlockTopic(tally.blocked, tally.checked)) {
-              throw new GenerationBlockedError(`생성 불가 — "${topic.info.query}" 영상 ${tally.checked}개 중 ${tally.blocked}개에서 부적절한 장면이 감지됐어요.`);
-            }
-            throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
+        const prepared = await job.promise;
+        url = prepared.url;
+        const { analysis, verdict } = prepared;
+        const tally = screening.get(topic)!;
+        tally.checked++;
+        if (verdict.blocked) {
+          tally.blocked++;
+          // 받아 본 영상 중 상당수에서 부적절한 장면이 나오면 주제 자체를 막습니다.
+          if (shouldBlockTopic(tally.blocked, tally.checked)) {
+            throw new GenerationBlockedError(`생성 불가 — "${topic.info.query}" 영상 ${tally.checked}개 중 ${tally.blocked}개에서 부적절한 장면이 감지됐어요.`);
           }
-          const scores = scoreSamples(analysis.samples, style.weights);
-          const length = Math.min(highlightLength, analysis.duration * 0.5);
-          const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
-          if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
-          const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
-          loaded.push(source);
-          loadedBy.get(topic)!.push(source);
-          events.loaded(source);
-          return true;
-        } catch (error) {
-          URL.revokeObjectURL(url);
-          throw error;
+          throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
         }
+        const scores = scoreSamples(analysis.samples, style.weights);
+        const length = Math.min(highlightLength, analysis.duration * 0.5);
+        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
+        if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
+        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
+        loaded.push(source);
+        loadedBy.get(topic)!.push(source);
+        events.loaded(source);
+        return true;
       } catch (error) {
+        if (url) URL.revokeObjectURL(url);
         if (signal.aborted || error instanceof GenerationBlockedError) throw error;
         const reason = describeError(error);
         failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
         events.skipped(candidate, reason);
+      } finally {
+        current = null;
       }
     }
-    return false;
   };
 
-  // 1) 주제별 몫을 채웁니다 (비중이 큰 주제부터).
-  const byWeight = active.map((t, i) => ({ t, q: quota[i] })).sort((a, b) => b.t.weight - a.t.weight);
-  for (const { t, q } of byWeight) {
-    const perSource = Math.ceil((approxCuts * (t.weight / totalWeight)) / Math.max(1, q)) + 2;
-    while (loadedBy.get(t)!.length < q && (await tryNext(t, perSource))) {
-      /* 몫을 채울 때까지 */
+  /** 쓰지 않게 된 미리 받기 작업을 멈추고 메모리를 돌려줍니다. */
+  const discardPrefetched = () => {
+    signal.removeEventListener("abort", onAbort);
+    for (const queue of queues.values()) {
+      for (const job of queue) {
+        job.controller.abort();
+        job.promise.then(prepared => URL.revokeObjectURL(prepared.url), () => undefined);
+      }
+      queue.length = 0;
     }
-  }
-  // 2) 영상이 모자란 주제가 있으면 남은 칸을 다른 주제의 다음 후보로 채웁니다.
-  for (let progress = true; loaded.length < slots && progress; ) {
-    progress = false;
-    for (const { t } of byWeight) {
-      if (loaded.length >= slots) break;
-      if (await tryNext(t, Math.ceil(approxCuts / slots) + 2)) progress = true;
+  };
+
+  try {
+    // 1) 주제별 몫을 채웁니다 (비중이 큰 주제부터).
+    const byWeight = active.map((t, i) => ({ t, q: quota[i] })).sort((a, b) => b.t.weight - a.t.weight);
+    for (const { t, q } of byWeight) {
+      const perSource = Math.ceil((approxCuts * (t.weight / totalWeight)) / Math.max(1, q)) + 2;
+      while (loadedBy.get(t)!.length < q && (await tryNext(t, perSource, q - loadedBy.get(t)!.length))) {
+        /* 몫을 채울 때까지 */
+      }
     }
+    // 2) 영상이 모자란 주제가 있으면 남은 칸을 다른 주제의 다음 후보로 채웁니다.
+    for (let progress = true; loaded.length < slots && progress; ) {
+      progress = false;
+      for (const { t } of byWeight) {
+        if (loaded.length >= slots) break;
+        if (await tryNext(t, Math.ceil(approxCuts / slots) + 2, slots - loaded.length)) progress = true;
+      }
+    }
+  } finally {
+    discardPrefetched();
   }
 
   if (!loaded.length) {

@@ -90,24 +90,25 @@ export function pickAliases(entity: any, exclude: string[]): string[] {
 /** Wikidata 직접 검색이 실패하면 Wikipedia 검색으로 문서를 찾아 연결된 Wikidata 항목을 얻습니다. */
 async function findEntityId(query: string, signal?: AbortSignal): Promise<string | null> {
   const languages = HANGUL.test(query) ? ["ko", "en"] : ["en", "ko"];
-  for (const language of languages) {
-    const search = await getJson(
-      api("https://www.wikidata.org/w/api.php", { action: "wbsearchentities", search: query, language, uselang: language, type: "item", limit: "1" }),
+  const wikidata = (language: string) =>
+    getJson(api("https://www.wikidata.org/w/api.php", { action: "wbsearchentities", search: query, language, uselang: language, type: "item", limit: "1" }), signal)
+      .then(search => (typeof search?.search?.[0]?.id === "string" ? (search.search[0].id as string) : null))
+      .catch(() => null);
+  const wikipedia = (language: string) =>
+    getJson(
+      api(`https://${language}.wikipedia.org/w/api.php`, { action: "query", generator: "search", gsrsearch: query, gsrlimit: "1", prop: "pageprops", ppprop: "wikibase_item" }),
       signal
-    ).catch(() => null);
-    const id = search?.search?.[0]?.id;
-    if (typeof id === "string") return id;
-  }
-  for (const language of languages) {
-    const data = await getJson(
-      api(`https://${language}.wikipedia.org/w/api.php`, {
-        action: "query", generator: "search", gsrsearch: query, gsrlimit: "1", prop: "pageprops", ppprop: "wikibase_item",
-      }),
-      signal
-    ).catch(() => null);
-    const page: any = Object.values(data?.query?.pages ?? {})[0];
-    const id = page?.pageprops?.wikibase_item;
-    if (typeof id === "string") return id;
+    )
+      .then(data => {
+        const page: any = Object.values(data?.query?.pages ?? {})[0];
+        return typeof page?.pageprops?.wikibase_item === "string" ? (page.pageprops.wikibase_item as string) : null;
+      })
+      .catch(() => null);
+  // 속도: 네 가지 찾기를 한꺼번에 보내고, 우선순위(Wikidata 한국어 → 영어 → Wikipedia 한국어 → 영어) 순으로 첫 결과를 씁니다.
+  const lookups = [...languages.map(wikidata), ...languages.map(wikipedia)];
+  for (const lookup of lookups) {
+    const id = await lookup;
+    if (id) return id;
   }
   return null;
 }
@@ -217,25 +218,30 @@ function words(text: string) {
  * - 짧은 영어 이름(BTS, IU)은 다른 단어 속에 들어간 경우를 빼려고 단어 단위로만 비교
  */
 export function matchesTopic(text: string, topic: TopicInfo): boolean {
-  const haystack = compactFold(text);
-  const tokens = new Set(words(text));
-  for (const name of topicNames(topic)) {
-    const key = compactFold(name);
-    if (!key) continue;
-    const latin = !HANGUL.test(name);
-    if (!latin) {
-      if (key.length >= 2 && haystack.includes(key)) return true;
-      continue;
+  return createTopicMatcher(topic)(text);
+}
+
+/** 주제 이름들을 미리 정리해 둔 판정 함수 — 영상이 많을 때 matchesTopic을 반복 호출하는 것보다 빠릅니다. */
+export function createTopicMatcher(topic: TopicInfo): (text: string) => boolean {
+  const names = topicNames(topic).map(name => ({ key: compactFold(name), latin: !HANGUL.test(name), parts: words(name).filter(part => part.length >= 2) }));
+  return text => {
+    const haystack = compactFold(text);
+    const tokens = new Set(words(text));
+    for (const { key, latin, parts } of names) {
+      if (!key) continue;
+      if (!latin) {
+        if (key.length >= 2 && haystack.includes(key)) return true;
+        continue;
+      }
+      if (key.length < 4) {
+        if (tokens.has(key) || (parts.length > 1 && parts.every(part => tokens.has(part)))) return true;
+        continue;
+      }
+      if (haystack.includes(key)) return true;
+      if (parts.length > 1 && parts.every(part => tokens.has(part))) return true;
     }
-    const parts = words(name).filter(part => part.length >= 2);
-    if (key.length < 4) {
-      if (tokens.has(key) || (parts.length > 1 && parts.every(part => tokens.has(part)))) return true;
-      continue;
-    }
-    if (haystack.includes(key)) return true;
-    if (parts.length > 1 && parts.every(part => tokens.has(part))) return true;
-  }
-  return false;
+    return false;
+  };
 }
 
 // ---------------------------------------------------------------------------
