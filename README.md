@@ -18,8 +18,9 @@
    - 관련 주제 — Wikidata의 소속 팀·그룹·구성원·종목·장르·대표작 등과 Wikipedia의 비슷한 문서
    - 화면에 실제로 쓴 검색어가 표시되고, 넓힌 검색어로 찾은 영상일수록 뒤로 밀립니다.
 2. **영상 검색** — 영상 라이선스 선택에 따라 찾는 곳이 달라집니다.
-   - **모든 공개 영상**(기본): **YouTube**와 **Reddit**(Reddit에 올라온 영상과 공유된 YouTube 링크)을 **한국어와 영어로 함께** 검색해(예: `손흥민` + `Son Heung-min goal`, 영어 이름은 Wikidata에서 가져옴) 먼저 찾고, Wikimedia Commons·Internet Archive로 보충합니다. 라이선스와 관계없이 쓰므로 영상마다 "재사용 허가 확인 필요" 표시가 붙습니다.
-   - **재사용 가능만**: Wikimedia Commons·Internet Archive에서 2차 편집이 허용되는 **Public domain · CC0 · CC BY · CC BY-SA** 영상만 씁니다.
+   - **모든 공개 영상**(기본): **YouTube**와 **Reddit**(Reddit에 올라온 영상과 공유된 YouTube 링크)을 **한국어와 영어로 함께** 검색해(예: `손흥민` + `Son Heung-min goal`, 영어 이름은 Wikidata에서 가져옴) 먼저 찾고, Wikimedia Commons·Internet Archive·스톡 영상(Pexels·Pixabay·Mixkit)으로 보충합니다. 라이선스와 관계없이 쓰므로 영상마다 "재사용 허가 확인 필요" 표시가 붙습니다.
+   - **재사용 가능만**: Wikimedia Commons·Internet Archive에서 2차 편집이 허용되는 **Public domain · CC0 · CC BY · CC BY-SA** 영상과 무료 스톡 영상만 씁니다.
+   - **스톡 영상**: [Pexels](https://www.pexels.com/license/)·[Pixabay](https://pixabay.com/service/license-summary/)·[Mixkit](https://mixkit.co/license/#videoFree)은 무료로 수정·상업 이용이 가능한 자체 라이선스라 두 모드 모두에서 씁니다. 영어 이름으로 검색하고, 제목·태그에 주제 이름이 있는 영상만 씁니다(풍경·도시·사물 주제에 잘 맞고, 인물은 거의 없음). Pexels·Pixabay는 무료 API 키가 필요해 **영상 라이선스 → 스톡 영상 API 키**에 넣거나(이 기기에만 저장) Vercel 환경 변수 `PEXELS_API_KEY`, `PIXABAY_API_KEY`를 설정하세요. Mixkit은 키 없이 됩니다.
    - **관련성 확인**: 넓힌 검색어로 찾았더라도, 제목·태그·채널에 주제 이름(한국어·영어·별칭, 띄어쓰기·기호·순서 차이 허용)이 실제로 나오는 영상만 씁니다. 주제의 Commons 분류나 Wikidata 대표 영상은 이름이 없어도 씁니다. 관련 주제는 항상 주제 이름과 함께 검색합니다(예: `Son Heung-min Tottenham`). 이름이 나오는 영상이 없으면 엉뚱한 영상으로 만들지 않고 "찾지 못했어요"라고 알려 줍니다.
 3. **하이라이트 분석** — 영상을 내려받아(파일당 최대 150MB, 가능하면 480p) 프레임마다 움직임·색감·밝기·소리 세기와 장면 전환을 측정합니다. 특징에 맞춘 가중치로 점수를 매기고, 장면 전환이 끼지 않은 가장 좋은 구간을 골라냅니다.
 4. **비트 편집** — 인트로 → 드롭 → 아웃트로 구조로 컷을 박자에 맞춰 배치합니다. 가장 좋은 장면은 드롭에 들어가고, 같은 영상이 연달아 나오지 않게 섞습니다.
@@ -111,7 +112,7 @@ Node.js 22+, pnpm 10+. 최신 Chrome · Edge · Firefox 데스크톱을 권장�
 
 ### 휴대폰에서 쓰기
 
-https://editmatker.vercel.app 을 휴대폰 브라우저로 열면 바로 됩니다. 휴대폰에서는 로컬 도우미를 실행할 수 없으므로 **YouTube 없이** Reddit · Wikimedia Commons · Internet Archive에서 영상을 찾습니다.
+https://editmatker.vercel.app 을 휴대폰 브라우저로 열면 바로 됩니다. 휴대폰에서는 로컬 도우미를 실행할 수 없으므로 **YouTube 없이** Reddit · Wikimedia Commons · Internet Archive · 스톡 영상(Pexels·Pixabay·Mixkit)에서 영상을 찾습니다.
 
 - Reddit은 휴대폰 브라우저에서 직접 검색하고, 막히면 Vercel 함수(`api/reddit.ts`, `api/media.ts`)를 거쳐 다시 시도합니다.
 - 작업하는 동안 화면이 꺼지지 않게 하고, 끝나면 **공유 · 사진에 저장** 버튼으로 사진 앱이나 SNS로 바로 보낼 수 있습니다.
@@ -146,13 +147,14 @@ Vercel에 연결되어 있어 `main` 브랜치에 푸시하면 자동으로 배�
 - `src/lib/style.ts` — 특징 문장 → 무드·BPM·색감·효과·검색 힌트
 - `src/lib/topic.ts` — Wikidata·Wikipedia 주제 해석, 별칭·관련 주제로 검색어 확장
 - `src/lib/sources.ts` — Commons · Internet Archive 검색, 라이선스 판정, 출처 통합·정렬, 다운로드
+- `src/lib/stock.ts`, `api/stock.ts` — Pexels · Pixabay · Mixkit 검색(키가 없거나 CORS가 막히면 서버 프록시)
 - `src/lib/social.ts` — YouTube · Reddit 검색과 로컬 도우미 연결
 - `src/lib/framing.ts` — 관심 지점 찾기와 자동 리프레이밍
 - `src/lib/learn.ts`, `src/lib/reference.ts` — 참고 에딧 분석과 스타일 학습
 - `src/lib/presets.ts` — 프리셋 저장
 - `src/lib/moderation.ts` — 금지어 검사와 NSFW.js 장면 검열
 - `src/lib/device.ts` — 휴대폰 한도, iOS 오디오 잠금 해제, 화면 켜짐 유지, 공유
-- `api/reddit.ts`, `api/media.ts` — Reddit 검색·영상 프록시 (Vercel 함수)
+- `api/reddit.ts`, `api/stock.ts`, `api/media.ts` — Reddit·스톡 검색과 영상 프록시 (Vercel 함수)
 - `helper/server.mjs` — yt-dlp로 YouTube · Reddit 영상을 받아 주는 로컬 도우미
 - `src/lib/analyze.ts` — 브라우저에서 프레임·오디오 측정
 - `src/lib/highlights.ts` — 점수 계산과 하이라이트 구간 선택
