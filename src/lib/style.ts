@@ -22,6 +22,10 @@ export interface EditStyle {
   bpmExplicit?: boolean;
   /** 컷 전환을 하나로 고정 (없으면 무드에 맞게 자동) */
   transition?: TransitionStyle;
+  /** 컷 속도 (특징 문장에서 읽었으면 그 값, 없으면 보통) */
+  pace?: Pace;
+  /** 특징 문장에서 알아들은 말 (화면에 "이렇게 읽었어요"로 보여 줌) */
+  matched?: string[];
 }
 
 export type TransitionStyle = "cut" | "fade" | "whip" | "punch";
@@ -46,6 +50,8 @@ export const MOOD_LABEL: Record<Mood, string> = { hype: "하이프", cinematic: 
 export const PACE_LABEL: Record<Pace, string> = { slow: "느리게", normal: "보통", fast: "빠르게" };
 export const TRANSITION_LABEL: Record<TransitionStyle, string> = { cut: "바로 컷", fade: "크로스페이드", whip: "휩", punch: "줌 펀치" };
 
+const PACE_FACTOR: Record<Pace, number> = { fast: 0.5, normal: 1, slow: 2 };
+
 function scalePattern(pattern: number[], factor: number) {
   return pattern.map(beats => Math.min(8, Math.max(1, Math.round(beats * factor))));
 }
@@ -58,7 +64,8 @@ export function applyOverrides(style: EditStyle, overrides: StyleOverrides | und
     if (on) effects.add(effect);
     else effects.delete(effect);
   }
-  const factor = overrides.pace === "fast" ? 0.5 : overrides.pace === "slow" ? 2 : 1;
+  // 특징 문장에서 이미 빠르게/느리게를 읽었으면 그 기준에서 고른 속도로 바꿉니다(직접 고른 속도가 그대로 나오게).
+  const factor = overrides.pace ? PACE_FACTOR[overrides.pace] / PACE_FACTOR[style.pace ?? "normal"] : 1;
   return {
     ...style,
     bpm: overrides.bpm ? clamp(Math.round(overrides.bpm), 60, 180) : style.bpm,
@@ -70,6 +77,7 @@ export function applyOverrides(style: EditStyle, overrides: StyleOverrides | und
         ? style.cutBeats
         : { intro: scalePattern(style.cutBeats.intro, factor), drop: scalePattern(style.cutBeats.drop, factor), outro: scalePattern(style.cutBeats.outro, factor) },
     transition: overrides.transition ?? style.transition,
+    pace: overrides.pace ?? style.pace,
   };
 }
 
@@ -109,11 +117,31 @@ export function defaultBpm(mood: Mood): number {
 }
 
 const MOOD_KEYWORDS: Record<Mood, RegExp> = {
-  hype: /빠른|빠르게|에너지|신나|강렬|하이프|격렬|폭발|힙합|펑크|파워|박진감|열정|미친|hype|fast|energ|phonk|trap|intense|aggressive/i,
-  cinematic: /시네마|영화|웅장|장엄|에픽|서사|비장|전설|트레일러|cinema|epic|movie|trailer|legend/i,
-  emotional: /잔잔|감성|감동|느린|차분|몽환|그리움|슬픈|추억|로파이|여운|따뜻한 감|calm|chill|lofi|lo-fi|sad|emotional|soft|dreamy|slow/i,
-  retro: /레트로|빈티지|옛날|복고|vhs|80년대|90년대|필름|아날로그|retro|vintage|synthwave|old/i,
+  hype: /빠른|빠르게|에너지|신나|신난|강렬|하이프|격렬|폭발|힙합|펑크|파워|박진감|열정|미친|멋있|멋지|간지|쩌는|짜릿|화끈|역동|다이나믹|타격감|임팩트|하드|헤비|광란|분노|전투|싸움|파이팅|승리|스피디|드리프트|텐션|흥분|hype|fast|energ|phonk|trap|intense|aggressive|hard|dynamic|hyper|insane|crazy|edm|dubstep|drill|banger/i,
+  cinematic: /시네마|영화|웅장|장엄|에픽|서사|비장|전설|트레일러|압도|긴장|긴박|소름|위엄|영웅|장대|드라마틱|오케스트라|명장면|대서사|cinema|epic|movie|trailer|legend|dramatic|orchestral|heroic|tense|majestic|grand/i,
+  emotional: /잔잔|감성|감동|느린|차분|몽환|그리움|그리운|슬픈|추억|로파이|여운|따뜻한 감|부드럽|아련|애틋|힐링|평화|여유|고요|낭만|사랑|청춘|눈물|감미|피아노|어쿠스틱|calm|chill|lofi|lo-fi|sad|emotional|soft|dreamy|slow|piano|acoustic|healing|peaceful|romantic|nostalgic|gentle|mellow/i,
+  retro: /레트로|빈티지|옛날|복고|vhs|80년대|90년대|필름|아날로그|8비트|픽셀|오락실|시티팝|디스코|캠코더|y2k|retro|vintage|synthwave|old|city ?pop|disco|camcorder|8-?bit/i,
 };
+
+/** 컷 속도: "빠른 컷", "천천히" 같은 말 */
+const PACE_KEYWORDS: [Pace, RegExp][] = [
+  ["fast", /빠른 ?컷|빠르게 ?(?:편집|자르|넘기|컷)|컷 ?빠르|속도감|정신없|쉴 ?틈|휙휙|숨 ?가쁘|fast ?cuts?|quick ?cuts?|rapid/i],
+  ["slow", /천천히|느린 ?컷|느리게 ?(?:편집|넘기|컷)|길게|여유롭|롱테이크|롱 ?컷|slow ?cuts?|long ?takes?/i],
+];
+
+/** 전환: "페이드", "휩" 같은 말 */
+const TRANSITION_KEYWORDS: [TransitionStyle, RegExp][] = [
+  ["fade", /페이드|디졸브|부드러운 ?전환|자연스러운 ?전환|cross ?fade|fade|dissolve/i],
+  ["whip", /휩|스와이프|휙 ?넘|whip|swipe/i],
+  ["punch", /줌 ?펀치|펀치 ?줌|punch/i],
+  ["cut", /하드 ?컷|바로 ?컷|점프 ?컷|hard ?cut|jump ?cut/i],
+];
+
+/** "슬로모션 없이", "흔들림 빼고", "no glitch" 처럼 효과를 빼 달라는 말인지 */
+function negated(text: string, re: RegExp): boolean {
+  const word = `(?:${re.source})`;
+  return new RegExp(`${word}[가-힣]{0,3}\\s*(?:없이|빼고|빼줘|말고|제외|금지|싫|x\\b|안 ?(?:넣|쓰|써))|(?:no|without|without any)\\s+${word}`, "i").test(text);
+}
 
 const MOOD_PRESETS: Record<Mood, Omit<EditStyle, "mood" | "grade" | "effects" | "searchHints"> & { grade: Grade; effects: Effect[] }> = {
   hype: {
@@ -205,9 +233,34 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   const mood: Mood = options.mood ?? (best.hits > 0 ? best.mood : "hype");
   const preset = MOOD_PRESETS[mood];
 
-  const grade = GRADE_KEYWORDS.find(([, re]) => re.test(text))?.[0] ?? preset.grade;
+  const matched = new Set<string>();
+  const note = (re: RegExp) => {
+    const hit = re.exec(text)?.[0];
+    if (hit) matched.add(hit.trim());
+    return Boolean(hit);
+  };
+  if (!options.mood && best.hits > 0) note(MOOD_KEYWORDS[mood]);
+  const grade = GRADE_KEYWORDS.find(([, re]) => note(re))?.[0] ?? preset.grade;
   const effects = new Set<Effect>(preset.effects);
-  for (const [effect, re] of EFFECT_KEYWORDS) if (re.test(text)) effects.add(effect);
+  for (const [effect, re] of EFFECT_KEYWORDS) {
+    const hit = re.exec(text)?.[0]?.trim();
+    if (!hit) continue;
+    // "슬로모션 없이"처럼 빼 달라고 했으면 기본 효과에서도 뺍니다.
+    if (negated(text, re)) {
+      effects.delete(effect);
+      matched.add(`${EFFECT_LABEL[effect]} 빼기`);
+    } else {
+      effects.add(effect);
+      matched.add(hit);
+    }
+  }
+  const pace = PACE_KEYWORDS.find(([, re]) => note(re))?.[0];
+  const transition = TRANSITION_KEYWORDS.find(([, re]) => note(re))?.[0];
+  const paceFactor = pace ? PACE_FACTOR[pace] : 1;
+  const cutBeats =
+    paceFactor === 1
+      ? preset.cutBeats
+      : { intro: scalePattern(preset.cutBeats.intro, paceFactor), drop: scalePattern(preset.cutBeats.drop, paceFactor), outro: scalePattern(preset.cutBeats.outro, paceFactor) };
   if (/효과 ?없|깔끔|미니멀|clean|minimal/i.test(text)) {
     effects.delete("glitch");
     effects.delete("shake");
@@ -215,13 +268,19 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   }
 
   const bpmMatch = /(\d{2,3})\s*bpm/i.exec(text);
-  const bpm = bpmMatch ? clamp(Number(bpmMatch[1]), 60, 180) : preset.bpm;
+  if (bpmMatch) matched.add(bpmMatch[0]);
+  // "빠른 비트/템포", "느린 템포"는 분위기 기본 템포를 조금 올리거나 내립니다.
+  const tempoUp = !bpmMatch && note(/빠른 ?(?:비트|템포|음악|박자)|템포 ?빠르|fast ?(?:beat|tempo)|up ?tempo/i);
+  const tempoDown = !bpmMatch && !tempoUp && note(/느린 ?(?:비트|템포|음악|박자)|템포 ?느리|slow ?(?:beat|tempo)|down ?tempo/i);
+  const bpm = bpmMatch ? clamp(Number(bpmMatch[1]), 60, 180) : clamp(preset.bpm + (tempoUp ? 15 : tempoDown ? -15 : 0), 60, 180);
 
   const searchHints = [...new Set(HINT_DICTIONARY.filter(([re]) => re.test(text)).map(([, hint]) => hint))];
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
     // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
     if (isNsfwRequested(word)) continue;
-    if (!Object.values(MOOD_KEYWORDS).some(re => re.test(word)) && searchHints.length < 4) searchHints.push(word.toLowerCase());
+    // 편집 스타일을 말하는 영어 단어(fade, fast cuts, grain 등)는 영상 검색어로 쓰지 않습니다.
+    const styleWord = [...Object.values(MOOD_KEYWORDS), ...GRADE_KEYWORDS.map(([, re]) => re), ...EFFECT_KEYWORDS.map(([, re]) => re), ...PACE_KEYWORDS.map(([, re]) => re), ...TRANSITION_KEYWORDS.map(([, re]) => re)].some(re => re.test(word));
+    if (!styleWord && !/^(?:cuts?|edits?|style|no|without|beats?|tempo|transitions?|effects?|feel|vibe|mood)$/i.test(word) && searchHints.length < 4) searchHints.push(word.toLowerCase());
   }
 
   return {
@@ -230,10 +289,13 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     bpmExplicit: Boolean(bpmMatch),
     grade,
     effects,
-    cutBeats: preset.cutBeats,
+    cutBeats,
     weights: preset.weights,
     searchHints: searchHints.slice(0, 4),
     label: preset.label,
+    pace,
+    transition,
+    matched: [...matched],
   };
 }
 

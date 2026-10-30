@@ -24,6 +24,18 @@ export function isArchiveMediaUrl(value: string): boolean {
   }
 }
 
+const AUDIO_HOSTS = [/(^|\.)jamendo\.com$/, /^cdn\.freesound\.org$/, /^freesound\.org$/, /^ccmixter\.org$/];
+
+/** 프록시로 받아 줄 수 있는 무료 음악(Openverse에 나오는 Jamendo·Freesound·ccMixter) 파일 주소인지 */
+export function isAudioMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && AUDIO_HOSTS.some(re => re.test(url.hostname)) && !url.port && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 /** Mixkit 검색 주소의 경로 조각 ("Tokyo Tower" → "tokyo-tower"). 라틴 문자가 없으면 null */
 export function mixkitSlug(q: string): string | null {
   const slug = q

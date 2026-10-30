@@ -37,7 +37,42 @@ export interface Highlight {
   score: number;
   /** 이 영상이 편집에서 차지할 비중 (주제 가중치를 영상 수로 나눈 값, 기본 1) */
   weight?: number;
+  /** 구간에서 가장 강한 순간(펀치·슛·착지처럼 움직임과 소리가 확 튀는 때)의 원본 시각 — 편집에서 이 순간이 잘리지 않게 씀 */
+  peak?: number;
 }
+
+/**
+ * 샘플마다 "임팩트"(0~1): 움직임이 직전보다 갑자기 커지거나 소리가 확 커지는 정도.
+ * 평균 움직임이 큰 장면이 아니라 주먹이 꽂히는 순간처럼 확 튀는 순간을 찾으려고 씁니다.
+ */
+export function impactSamples(samples: FrameSample[]): number[] {
+  const raw = samples.map((s, i) => {
+    if (s.cut || !i) return 0;
+    let before = 0;
+    let n = 0;
+    for (let j = Math.max(0, i - 3); j < i; j++) {
+      if (samples[j].cut) continue;
+      before += samples[j].motion;
+      n++;
+    }
+    const motionJump = Math.max(0, s.motion - (n ? before / n : 0));
+    const audioJump = Math.max(0, s.audio - samples[i - 1].audio);
+    return { motionJump, audioJump };
+  });
+  // 드물게 확 튀는 값이 핵심이라 백분위가 아니라 최댓값 기준으로 맞춥니다(normalize는 튀는 값을 잘라 버림).
+  const byMax = (values: number[]) => {
+    const max = Math.max(0, ...values);
+    return max > 1e-9 ? values.map(v => v / max) : values.map(() => 0);
+  };
+  const motion = byMax(raw.map(r => (r ? r.motionJump : 0)));
+  const audio = byMax(raw.map(r => (r ? r.audioJump : 0)));
+  return samples.map((_, i) => Math.min(1, 0.65 * motion[i] + 0.35 * audio[i]));
+}
+
+/** 임팩트가 구간 안 이 위치(앞에서부터 비율)쯤 오게 구간을 다시 잡습니다 — 준비 동작과 맞은 뒤 반응까지 보이게 */
+export const PEAK_POSITION = 0.55;
+/** 이 정도 이상 튀어야 "임팩트"로 봅니다 */
+const IMPACT_MIN = 0.35;
 
 export function normalize(values: number[]): number[] {
   const sorted = [...values].sort((a, b) => a - b);
@@ -100,6 +135,7 @@ export function pickHighlights(
 ): Highlight[] {
   if (!samples.length || duration < length) return [];
   const margin = Math.min(duration * 0.03, 3);
+  const impact = impactSamples(samples);
   const windows: Highlight[] = [];
   for (let i = 0; i < samples.length; i++) {
     const start = samples[i].t;
@@ -109,9 +145,11 @@ export function pickHighlights(
     let n = 0;
     let cutPenalty = 0;
     let still = 0;
+    let peakIndex = -1;
     for (let j = i; j < samples.length && samples[j].t < end; j++) {
       sum += scores[j];
       n++;
+      if (impact[j] >= IMPACT_MIN && (peakIndex < 0 || impact[j] > impact[peakIndex])) peakIndex = j;
       if (j > i && samples[j].cut) cutPenalty += 0.35;
       if (j > i && !samples[j].cut && samples[j].motion < STATIC_MOTION) still++;
     }
@@ -119,7 +157,38 @@ export function pickHighlights(
     const cleanStart = samples[i].cut || samples[i + 1]?.cut ? 0.05 : 0;
     // 거의 내내 멈춘 화면(정지 화면·자막 카드)은 에딧에 의미가 없으므로 크게 낮춥니다.
     const frozen = n > 2 && still / (n - 1) > 0.8 ? 0.35 : 1;
-    if (n) windows.push({ sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart) * frozen) });
+    // 확 튀는 순간이 있는 구간을 조금 더 높게 칩니다(펀치·슛·덩크 같은 결정적 장면).
+    const impactBonus = peakIndex >= 0 ? 0.15 * impact[peakIndex] : 0;
+    if (n) {
+      const window: Highlight = { sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart + impactBonus) * frozen) };
+      if (peakIndex >= 0) window.peak = samples[peakIndex].t;
+      windows.push(window);
+    }
+  }
+  // 임팩트가 구간 끝에 걸리면 맞는 순간 직전에 컷이 넘어가므로, 임팩트가 구간 가운데쯤 오게 구간을 옮깁니다.
+  // 단, 옮긴 구간에 다른 장면(장면 전환 앞)이 섞이지 않게 임팩트 직전의 장면 전환보다 앞으로는 가지 않습니다.
+  // 또 옮긴 구간이 원래보다 눈에 띄게 심심해지면(예: 계속 이어지는 동작의 시작점 — 앞이 그냥 빈 장면) 옮기지 않습니다.
+  const cutTimes = samples.filter(sample => sample.cut).map(sample => sample.t);
+  const average = (from: number) => {
+    let sum = 0;
+    let n = 0;
+    for (let j = 0; j < samples.length; j++) {
+      if (samples[j].t < from) continue;
+      if (samples[j].t >= from + length) break;
+      sum += scores[j];
+      n++;
+    }
+    return n ? sum / n : 0;
+  };
+  for (const w of windows) {
+    if (w.peak === undefined) continue;
+    const peak = w.peak;
+    let start = Math.min(Math.max(margin, peak - PEAK_POSITION * length), duration - margin - length);
+    const lastCut = cutTimes.filter(t => t > start && t <= peak).pop();
+    if (lastCut !== undefined) start = lastCut;
+    if (average(start) >= average(w.start) * 0.9) w.start = start;
+    // 옮기지 못했어도 임팩트가 구간 밖으로 밀려났으면 편집에서 쓰지 않게 지웁니다.
+    if (w.peak < w.start || w.peak >= w.start + length) delete w.peak;
   }
   windows.sort((a, b) => b.score - a.score);
   // 의미 없는 구간을 채워 넣지 않도록, 가장 좋은 구간보다 많이 떨어지는 구간은 고르지 않습니다.

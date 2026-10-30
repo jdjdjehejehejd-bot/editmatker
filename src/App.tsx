@@ -63,6 +63,7 @@ export default function App() {
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [learnOnline, setLearnOnline] = useState(false);
   const [musicStyle, setMusicStyle] = useState<MusicStyle>("auto");
+  const [freeMusic, setFreeMusic] = useState(false);
   const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
@@ -141,7 +142,7 @@ export default function App() {
   const blockedInput = useMemo(() => checkUserInput([topic, overlayText].join("\n"), features), [topic, overlayText, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides, overlay, framing };
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, freeMusic, style: overrides, overlay, framing };
   // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
   const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle } : run!;
   const [width, height] = ASPECT_SIZE[shown.aspect];
@@ -171,6 +172,7 @@ export default function App() {
     setSourceCount(Math.min(preset.sourceCount, LIMITS.maxSources));
     setLicenseMode(preset.licenseMode);
     setMusicStyle(preset.musicStyle ?? "auto");
+    setFreeMusic(preset.freeMusic ?? false);
     setOverrides(preset.style ?? {});
     setOverlay(preset.overlay ?? DEFAULT_OVERLAY);
     setFraming(preset.framing ?? "auto");
@@ -222,7 +224,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, freeMusic, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -427,7 +429,15 @@ export default function App() {
                 </small>
               </summary>
               <div className="style-actions">
-                <small>비워 둔 항목은 특징 문장에서 자동으로 정해요</small>
+                <small>
+                  {autoStyle.matched?.length ? (
+                    <>
+                      특징에서 읽은 말: <b>{autoStyle.matched.join(" · ")}</b> — 비워 둔 항목은 이걸로 정해요
+                    </>
+                  ) : (
+                    "특징·분위기 칸에 \"웅장하게, 빠른 컷, 흑백, 슬로모션 없이\"처럼 쓰면 아래 항목이 자동으로 정해져요"
+                  )}
+                </small>
                 <button type="button" className="chip" onClick={() => setOverrides({})} disabled={!hasOverrides}>
                   자동으로
                 </button>
@@ -472,7 +482,7 @@ export default function App() {
                 <label>
                   <span>컷 속도</span>
                   <select className="select" value={overrides.pace ?? ""} onChange={e => setOverride("pace", (e.target.value || undefined) as Pace | undefined)}>
-                    <option value="">자동 (보통)</option>
+                    <option value="">자동 ({PACE_LABEL[moodStyle.pace ?? "normal"]})</option>
                     {(Object.keys(PACE_LABEL) as Pace[]).map(pace => (
                       <option key={pace} value={pace}>
                         {PACE_LABEL[pace]}
@@ -483,7 +493,7 @@ export default function App() {
                 <label>
                   <span>전환</span>
                   <select className="select" value={overrides.transition ?? ""} onChange={e => setOverride("transition", (e.target.value || undefined) as TransitionStyle | undefined)}>
-                    <option value="">자동 (분위기에 맞게)</option>
+                    <option value="">자동 ({moodStyle.transition ? TRANSITION_LABEL[moodStyle.transition] : "분위기에 맞게"})</option>
                     {(Object.keys(TRANSITION_LABEL) as TransitionStyle[]).map(transition => (
                       <option key={transition} value={transition}>
                         {TRANSITION_LABEL[transition]}
@@ -615,8 +625,11 @@ export default function App() {
                 <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} style={{ "--fill": `${((sourceCount - 2) / (LIMITS.maxSources - 2)) * 100}%` } as CSSProperties} />
               </label>
               )}
-              <label className="field">
+              <div className="field">
                 <span>배경음악</span>
+                <div className="music-source">
+                  <Segmented options={["synth", "free"]} value={freeMusic ? "free" : "synth"} onChange={value => setFreeMusic(value === "free")} format={value => (value === "free" ? "무료 음악 찾기" : "자동 작곡")} />
+                </div>
                 <select className="select" value={musicStyle} onChange={e => setMusicStyle(e.target.value as MusicStyle)} disabled={Boolean(musicFile)} aria-label="배경음악 스타일">
                   {(Object.keys(MUSIC_STYLE_LABEL) as MusicStyle[]).map(key => (
                     <option key={key} value={key}>
@@ -624,8 +637,13 @@ export default function App() {
                     </option>
                   ))}
                 </select>
+                {freeMusic && !musicFile && (
+                  <small className="hint">
+                    Jamendo·Freesound·ccMixter 등(Openverse)에서 편집해도 되는 CC 음악을 위 스타일로 찾아 박자에 맞춰요.{!overlay.showCredits ? " CC BY 곡은 출처 표기가 조건이라 끝 출처를 켜 두세요." : ""}
+                  </small>
+                )}
                 <FilePick accept="audio/*" max={1} files={musicFile ? [musicFile] : []} onChange={files => setMusicFile(files[0] ?? null)} label="내 음악" hint="넣으면 그 음악의 템포에 맞춰요" />
-              </label>
+              </div>
             </div>
 
             <details className="advanced fold">
@@ -725,7 +743,7 @@ export default function App() {
               </span>
               <div>
                 <strong>{reelTitle}</strong>
-                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${shown.style.label} · ${shown.hasMusic ? "내 음악" : shown.musicStyle === "auto" ? "자동 작곡 음악" : `${MUSIC_STYLE_LABEL[shown.musicStyle]} 음악`}`}</small>
+                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${shown.style.label} · ${shown.hasMusic ? "내 음악" : freeMusic ? "무료 음악" : shown.musicStyle === "auto" ? "자동 작곡 음악" : `${MUSIC_STYLE_LABEL[shown.musicStyle]} 음악`}`}</small>
               </div>
               <span className="more" aria-hidden>
                 <MoreIcon />
@@ -796,6 +814,19 @@ export default function App() {
                     </span>
                   ))}
                 </div>
+              )}
+              {result?.track && (
+                <p className="learned">
+                  <b>배경음악</b>{" "}
+                  {result.track.pageUrl ? (
+                    <a href={result.track.pageUrl} target="_blank" rel="noreferrer">
+                      "{result.track.title}"
+                    </a>
+                  ) : (
+                    `"${result.track.title}"`
+                  )}{" "}
+                  — {result.track.creator} · {result.track.license} · {result.track.provider}
+                </p>
               )}
               {result?.profile && (
                 <p className="learned">
