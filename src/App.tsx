@@ -503,6 +503,17 @@ export default function App() {
               </div>
             </details>
 
+            <div className="field">
+              <span>참고 에딧 · 스타일 배우기</span>
+              <div className="learn">
+                <label className="toggle">
+                  <input type="checkbox" checked={learnOnline} onChange={e => setLearnOnline(e.target.checked)} />
+                  <span>인터넷에서 "주제 edit" 찾아 배우기</span>
+                </label>
+                <FilePick accept="video/*" multiple max={3} files={referenceFiles} onChange={setReferenceFiles} label="참고 에딧 올리기" hint="마음에 드는 에딧 영상을 올리면 컷 리듬·템포·색감을 따라 해요 (최대 3개)" />
+              </div>
+            </div>
+
             <details className="overlay-editor fold">
               <summary>
                 <strong>제목 · 텍스트</strong>
@@ -623,21 +634,9 @@ export default function App() {
                 <strong>세부 설정</strong>
                 <small>
                   {licenseMode === "any" ? "모든 공개 영상" : "재사용 가능만"}
-                  {learnOnline || referenceFiles.length ? " · 스타일 학습 켜짐" : ""}
                   {stockKeys.pexels || stockKeys.pixabay ? " · API 키" : ""}
                 </small>
               </summary>
-            <div className="field">
-              <span>참고 에딧 · 스타일 배우기</span>
-              <div className="learn">
-                <label className="toggle">
-                  <input type="checkbox" checked={learnOnline} onChange={e => setLearnOnline(e.target.checked)} />
-                  <span>인터넷에서 "주제 edit" 찾아 배우기</span>
-                </label>
-                <FilePick accept="video/*" multiple max={3} files={referenceFiles} onChange={setReferenceFiles} label="참고 에딧 올리기" hint="마음에 드는 에딧 영상을 올리면 컷 리듬·템포·색감을 따라 해요 (최대 3개)" />
-              </div>
-            </div>
-
             <div className="field">
               <span>영상 라이선스</span>
               <Segmented options={["any", "reusable"] as LicenseMode[]} value={licenseMode} onChange={setLicenseMode} format={mode => (mode === "any" ? "모든 공개 영상" : "재사용 가능만")} />
