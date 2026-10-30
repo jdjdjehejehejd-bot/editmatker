@@ -93,6 +93,8 @@ interface EnRule {
   word: string;
   category: BlockCategory;
   re: RegExp;
+  /** 띄어 쓴 변형(p o r n)을 붙여서 찾는 정규식 — 4글자 이상 단어만 (짧은 단어는 오탐이 많음) */
+  spacedRe: RegExp | null;
 }
 
 function buildKoRules(rules: Rule[]): KoRule[] {
@@ -101,7 +103,15 @@ function buildKoRules(rules: Rule[]): KoRule[] {
 
 function buildEnRules(rules: Rule[]): EnRule[] {
   return rules.flatMap(rule =>
-    (rule.en ?? []).map(word => ({ word, category: rule.category, re: new RegExp(`(^|[^a-z])${escapeRegExp(word).replace(/ /g, "\\s*")}($|[^a-z])`) }))
+    (rule.en ?? []).map(word => {
+      const key = word.replace(/ /g, "");
+      return {
+        word,
+        category: rule.category,
+        re: new RegExp(`(^|[^a-z])${escapeRegExp(word).replace(/ /g, "\\s*")}($|[^a-z])`),
+        spacedRe: key.length >= 4 ? new RegExp(`(^|[^a-z])${escapeRegExp(key)}($|[^a-z])`) : null,
+      };
+    })
   );
 }
 
@@ -127,11 +137,8 @@ export function findBlockedWords(text: string, options: ModerationOptions = {}):
   const compacts = variants.map(compact);
   const found = new Map<string, BlockedMatch>();
   for (const { word, category, key } of koWords) if (compacts.some(c => c.includes(key))) found.set(word, { word, category });
-  for (const { word, category, re } of enPatterns) {
-    // 띄어 쓴 변형(p o r n)은 4글자 이상 단어만 붙여서 검사합니다(짧은 단어는 오탐이 많음).
-    const key = word.replace(/ /g, "");
-    const spaced = key.length >= 4 && compacts.some(c => new RegExp(`(^|[^a-z])${escapeRegExp(key)}($|[^a-z])`).test(c));
-    if (variants.some(v => re.test(v)) || spaced) found.set(word, { word, category });
+  for (const { word, category, re, spacedRe } of enPatterns) {
+    if (variants.some(v => re.test(v)) || (spacedRe && compacts.some(c => spacedRe.test(c)))) found.set(word, { word, category });
   }
   return [...found.values()];
 }

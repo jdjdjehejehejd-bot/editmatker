@@ -101,6 +101,10 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   const H = canvas.height;
   const supportsFilter = "filter" in ctx && !/^((?!chrome|android).)*safari/i.test(navigator.userAgent);
   const grain = style.effects.has("grain") ? makeGrain() : null;
+  // 틸 & 오렌지 색 보정 레이어는 매 프레임 만들지 않고 한 번만 만듭니다.
+  const tealOrange = ctx.createLinearGradient(0, 0, 0, H);
+  tealOrange.addColorStop(0, "rgba(0,140,150,0.35)");
+  tealOrange.addColorStop(1, "rgba(255,130,40,0.3)");
   const vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
   vignette.addColorStop(0, "rgba(0,0,0,0)");
   vignette.addColorStop(1, "rgba(0,0,0,0.55)");
@@ -217,10 +221,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     }
     if (style.grade === "teal-orange") {
       ctx.globalCompositeOperation = "soft-light";
-      const tint = ctx.createLinearGradient(0, 0, 0, H);
-      tint.addColorStop(0, "rgba(0,140,150,0.35)");
-      tint.addColorStop(1, "rgba(255,130,40,0.3)");
-      ctx.fillStyle = tint;
+      ctx.fillStyle = tealOrange;
       ctx.fillRect(0, 0, W, H);
     }
     ctx.globalCompositeOperation = "source-over";

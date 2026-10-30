@@ -1,12 +1,13 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
 import { checkUserInput, isNsfwRequested, isTextAllowed } from "./lib/moderation";
-import { parseTopicInput } from "./lib/topic";
+import { BUILTIN_PRESETS, loadPresets, matchesPreset, savePresets, upsertPreset, type Preset, type PresetSettings } from "./lib/presets";
+import { parseTopicInput, type TopicSpec } from "./lib/topic";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
-import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
+import { EFFECT_LABEL, GRADE_LABEL, parseStyle, type EditStyle } from "./lib/style";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "topic", label: "주제 해석" },
@@ -17,16 +18,18 @@ const STEPS: { id: StepId; label: string }[] = [
   { id: "render", label: "렌더링" },
 ];
 
-const EXAMPLES = [
-  { topic: "손흥민", features: "골 장면, 신나는 빠른 컷, 플래시" },
-  { topic: "뉴진스", features: "무대, 감성, 따뜻한 색감, 슬로우모션" },
-  { topic: "아폴로 11호", features: "웅장하고 시네마틱하게, 로켓 발사, 슬로우모션" },
-  { topic: "Tokyo", features: "레트로 신스웨이브, 야경, 글리치, 네온" },
-];
 
 const SOURCE_COLORS = ["#f26a4b", "#4bb3f2", "#7bd389", "#f2c94b", "#b57bf2", "#f27bb5"];
 
 type Status = "idle" | "running" | "done" | "error";
+
+/** 만들기를 누른 순간의 입력 — 만드는 도중에 입력을 바꿔도 게시물 설명·화면 비율은 이 값을 따릅니다. */
+interface RunSnapshot {
+  specs: TopicSpec[];
+  style: EditStyle;
+  aspect: Aspect;
+  hasMusic: boolean;
+}
 
 export default function App() {
   const [topic, setTopic] = useState("");
@@ -36,9 +39,30 @@ export default function App() {
   const [sourceCount, setSourceCount] = useState(LIMITS.defaultSources);
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
+  const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
+  const [run, setRun] = useState<RunSnapshot | null>(null);
 
   const [status, setStatus] = useState<Status>("idle");
-  const [step, setStep] = useState<{ id: StepId; detail: string; ratio?: number } | null>(null);
+  const [step, setStepNow] = useState<{ id: StepId; detail: string; ratio?: number } | null>(null);
+  // 속도: 진행률은 초당 수십 번 바뀌므로 화면 갱신을 0.1초에 한 번으로 묶습니다(단계가 바뀌면 바로 반영).
+  const pendingStep = useRef<{ id: StepId; detail: string; ratio?: number } | null>(null);
+  const stepTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const shownStepId = useRef<StepId | null>(null);
+  const setStep = useCallback((next: { id: StepId; detail: string; ratio?: number } | null) => {
+    pendingStep.current = next;
+    const flush = () => {
+      stepTimer.current = null;
+      shownStepId.current = pendingStep.current?.id ?? null;
+      setStepNow(pendingStep.current);
+    };
+    if (!next || next.id !== shownStepId.current) {
+      if (stepTimer.current) clearTimeout(stepTimer.current);
+      flush();
+    } else if (!stepTimer.current) {
+      stepTimer.current = setTimeout(flush, 100);
+    }
+  }, []);
+  useEffect(() => () => void (stepTimer.current && clearTimeout(stepTimer.current)), []);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<SourceVideo[]>([]);
   const [queries, setQueries] = useState<QueryGroup[]>([]);
@@ -57,7 +81,36 @@ export default function App() {
   const blockedInput = useMemo(() => checkUserInput(topic, features), [topic, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const [width, height] = ASPECT_SIZE[aspect];
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode };
+  // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
+  const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile) } : run!;
+  const [width, height] = ASPECT_SIZE[shown.aspect];
+
+  const savePreset = () => {
+    if (!topic.trim()) return;
+    const suggested = topicSpecs.map(spec => spec.term).join(" · ").slice(0, 24);
+    const name = typeof window.prompt === "function" ? window.prompt("프리셋 이름", suggested) : suggested;
+    if (!name?.trim()) return;
+    setPresets(list => {
+      const next = upsertPreset(list, name, currentSettings);
+      savePresets(next);
+      return next;
+    });
+  };
+  const removePreset = (id: string) =>
+    setPresets(list => {
+      const next = list.filter(p => p.id !== id);
+      savePresets(next);
+      return next;
+    });
+  const applyPreset = (preset: Preset) => {
+    setTopic(preset.topic);
+    setFeatures(preset.features);
+    setSeconds(preset.seconds);
+    setAspect(preset.aspect);
+    setSourceCount(Math.min(preset.sourceCount, LIMITS.maxSources));
+    setLicenseMode(preset.licenseMode);
+  };
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
   const [checkingHelper, setCheckingHelper] = useState(false);
@@ -97,6 +150,7 @@ export default function App() {
     // 버튼을 누른 이 순간에 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
     const audio = unlockAudio();
     const releaseScreen = await keepScreenOn();
+    setRun({ specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile) });
     setStatus("running");
     stageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
@@ -177,7 +231,7 @@ export default function App() {
     const url = URL.createObjectURL(new Blob([JSON.stringify(json, null, 2)], { type: "application/json" }));
     const a = document.createElement("a");
     a.href = url;
-    a.download = `${slug(topic)}-edit-plan.json`;
+    a.download = `${slug(result.title)}-edit-plan.json`;
     a.click();
     URL.revokeObjectURL(url);
   };
@@ -185,8 +239,8 @@ export default function App() {
   const stepIndex = step ? STEPS.findIndex(s => s.id === step.id) : -1;
   const colorOf = (id: string) => SOURCE_COLORS[Math.max(0, loaded.findIndex(s => s.id === id)) % SOURCE_COLORS.length];
   const isBlockedError = Boolean(error?.startsWith("생성 불가"));
-  const reelTitle = result?.title ?? (topicSpecs.map(spec => spec.term).join(" × ") || "editmatker");
-  const hashtags = [preview.label.split("·")[0], GRADE_LABEL[preview.grade], ...[...preview.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
+  const reelTitle = result?.title ?? (shown.specs.map(spec => spec.term).join(" × ") || "editmatker");
+  const hashtags = [shown.style.label.split("·")[0], GRADE_LABEL[shown.style.grade], ...[...shown.style.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
     .map(tag => `#${tag.replace(/\s+/g, "")}`)
     .join(" ");
   const barState = (i: number) => (status === "done" || i < stepIndex ? "done" : i === stepIndex && status === "running" ? "active" : i === stepIndex && status === "error" ? "failed" : "");
@@ -214,32 +268,31 @@ export default function App() {
       </header>
 
       <main className="feed">
-        <section className="stories" aria-label="주제">
-          {(topicSpecs.length ? topicSpecs : [{ term: "새 주제", weight: 1 }]).map(spec => (
-            <div key={spec.term} className={`story ${topicSpecs.length ? "" : "empty"} ${topicSpecs.length && !isTextAllowed(spec.term) ? "blocked" : ""}`}>
-              <span className="ring">
-                <span className="avatar">{!topicSpecs.length ? "+" : isTextAllowed(spec.term) ? spec.term.slice(0, 1).toUpperCase() : "🚫"}</span>
-              </span>
-              <small>{spec.term}</small>
-              {topicSpecs.length > 1 && <b>{Math.round((spec.weight / topicWeightSum) * 100)}%</b>}
-            </div>
-          ))}
-          {EXAMPLES.map(example => (
-            <button
-              key={example.topic}
-              type="button"
-              className="story example"
-              onClick={() => {
-                setTopic(example.topic);
-                setFeatures(example.features);
-              }}
-            >
-              <span className="ring muted">
-                <span className="avatar">{example.topic.slice(0, 1)}</span>
-              </span>
-              <small>{example.topic}</small>
-            </button>
-          ))}
+        <section className="stories" aria-label="프리셋">
+          <button type="button" className="story add" onClick={savePreset} disabled={!topic.trim()} title="지금 입력을 프리셋으로 저장">
+            <span className="ring">
+              <span className="avatar">+</span>
+            </span>
+            <small>프리셋 저장</small>
+          </button>
+          {[...presets, ...BUILTIN_PRESETS].map(preset => {
+            const active = matchesPreset(preset, currentSettings);
+            return (
+              <div key={preset.id} className={`story preset ${active ? "active" : ""}`}>
+                <button type="button" className="story-hit" onClick={() => applyPreset(preset)} title={`${preset.topic} · ${preset.features || "특징 없음"}`}>
+                  <span className="ring">
+                    <span className="avatar">{preset.name.slice(0, 1).toUpperCase()}</span>
+                  </span>
+                  <small>{preset.name}</small>
+                </button>
+                {!preset.builtin && (
+                  <button type="button" className="story-remove" aria-label={`${preset.name} 프리셋 지우기`} onClick={() => removePreset(preset.id)}>
+                    ×
+                  </button>
+                )}
+              </div>
+            );
+          })}
         </section>
 
         <div className="columns">
@@ -261,6 +314,16 @@ export default function App() {
                 쉼표로 여러 주제를 섞을 수 있어요 · <code>3:케인:</code>은 3배 비중
               </small>
             </label>
+            {topicSpecs.length > 1 || topicSpecs.some(spec => spec.weight !== 1) ? (
+              <div className="topic-chips" aria-label="주제 비중">
+                {topicSpecs.map(spec => (
+                  <span key={spec.term} className={isTextAllowed(spec.term) ? "" : "blocked"}>
+                    {spec.term}
+                    <b>{Math.round((spec.weight / topicWeightSum) * 100)}%</b>
+                  </span>
+                ))}
+              </div>
+            ) : null}
 
             <label className="field">
               <span>특징 · 분위기</span>
@@ -362,7 +425,7 @@ export default function App() {
               </span>
               <div>
                 <strong>{reelTitle}</strong>
-                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${preview.label} · 자동 작곡 음악`}</small>
+                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${shown.style.label} · ${shown.hasMusic ? "내 음악" : "자동 작곡 음악"}`}</small>
               </div>
               <span className="more" aria-hidden>
                 <MoreIcon />
@@ -567,7 +630,8 @@ function Segmented<T extends string | number>({ options, value, onChange, format
   );
 }
 
-function ScoreGraph({ source, color }: { source: LoadedSource; color: string }) {
+// 진행률이 바뀔 때마다 그래프를 다시 그리지 않도록 메모합니다.
+const ScoreGraph = memo(function ScoreGraph({ source, color }: { source: LoadedSource; color: string }) {
   const { samples, duration } = source.analysis;
   const points = samples.map((s, i) => `${((s.t / duration) * 100).toFixed(2)},${(30 - source.scores[i] * 28).toFixed(2)}`).join(" ");
   return (
@@ -578,7 +642,7 @@ function ScoreGraph({ source, color }: { source: LoadedSource; color: string }) 
       <polyline points={points} fill="none" stroke={color} strokeWidth={0.8} vectorEffect="non-scaling-stroke" />
     </svg>
   );
-}
+});
 
 function slug(text: string) {
   return text.trim().replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-|-$/g, "").slice(0, 40) || "edit";
