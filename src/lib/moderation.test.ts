@@ -45,12 +45,25 @@ describe("금지어 검사", () => {
 
 describe("장면 판정", () => {
   const safe = { porn: 0.01, hentai: 0.01, sexy: 0.05 };
-  it("노골적인 장면이 하나라도 있으면 막는다", () => {
-    expect(judgeFrames([safe, { porn: 0.5, hentai: 0.2, sexy: 0.1 }, safe]).blocked).toBe(true);
+  const skin = { porn: 0.05, hentai: 0.02, sexy: 0.92 }; // 상의 탈의한 경기 장면처럼 노출만 많은 화면
+  it("아주 확실한 노골적 장면은 하나만 있어도 막는다", () => {
+    expect(judgeFrames([safe, { porn: 0.8, hentai: 0.1, sexy: 0.1 }, safe]).blocked).toBe(true);
   });
-  it("선정적인 장면은 두 번 이상일 때만 막는다", () => {
-    expect(judgeFrames([safe, { porn: 0, hentai: 0, sexy: 0.9 }]).blocked).toBe(false);
-    expect(judgeFrames([{ porn: 0, hentai: 0, sexy: 0.9 }, { porn: 0, hentai: 0, sexy: 0.95 }]).blocked).toBe(true);
+  it("애매한 노골적 장면 하나로는 막지 않고, 두 개면 막는다", () => {
+    const maybe = { porn: 0.5, hentai: 0.2, sexy: 0.1 };
+    expect(judgeFrames([safe, maybe, safe]).blocked).toBe(false);
+    expect(judgeFrames([maybe, safe, maybe]).blocked).toBe(true);
+  });
+  it("노출(선정적) 장면은 세 개 이상일 때만 막는다", () => {
+    expect(judgeFrames([skin, skin, safe]).blocked).toBe(false);
+    expect(judgeFrames([skin, skin, skin]).blocked).toBe(true);
+  });
+  it("스포츠 주제는 경기 중 노출로 막지 않지만 노골적인 장면은 막는다", () => {
+    const fight = Array.from({ length: 10 }, () => skin);
+    expect(judgeFrames(fight, { sports: true }).blocked).toBe(false);
+    expect(judgeFrames(fight).blocked).toBe(true);
+    expect(judgeFrames([safe, { porn: 0.95, hentai: 0, sexy: 0 }], { sports: true }).blocked).toBe(true);
+    expect(judgeFrames([{ porn: 0.7, hentai: 0, sexy: 0.2 }, { porn: 0.7, hentai: 0, sexy: 0.2 }], { sports: true }).blocked).toBe(false);
   });
   it("평범한 장면은 통과", () => {
     expect(judgeFrames([safe, safe, safe])).toEqual({ blocked: false, reason: null });

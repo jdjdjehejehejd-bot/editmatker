@@ -68,6 +68,8 @@ const SAFE_NORMALIZED = SAFE_PHRASES.map(p => p.normalize("NFKC"));
 /** 검열 옵션. 특징·분위기에 NSFW를 적으면 성적 콘텐츠 검사만 끕니다. */
 export interface ModerationOptions {
   nsfw?: boolean;
+  /** 스포츠 주제(격투기·수영 등 맨살이 많이 보이는 경기) — 노출만으로는 막지 않고 노골적인 장면만 봅니다 */
+  sports?: boolean;
 }
 
 /** NSFW 모드를 켜는 표시 — 띄어쓰기·기호(N.S.F.W, n s f w)도 같은 말로 봅니다. */
@@ -199,13 +201,27 @@ export interface FrameVerdict {
 
 /** 선정성 판정 기준: 노골적(Porn+Hentai) 0.6 이상 한 장면, 또는 선정적(Sexy) 0.85 이상 두 장면 */
 export const EXPLICIT_THRESHOLD = 0.6;
+/** 이 이상이면 한 장면만으로도 노골적이라고 봅니다 */
+export const EXPLICIT_STRONG = 0.85;
 export const SUGGESTIVE_THRESHOLD = 0.85;
+/** 선정성(노출) 판정에 필요한 장면 수 — 한두 장면의 오탐(상의 탈의 등)으로 막지 않게 */
+export const SUGGESTIVE_MIN_FRAMES = 3;
 
-export function judgeFrames(frames: FrameVerdict[]): { blocked: boolean; reason: string | null } {
-  const explicit = frames.filter(f => f.porn + f.hentai >= EXPLICIT_THRESHOLD).length;
+/**
+ * 장면 판정. 판별 모델은 맨살이 많이 보이면(격투기·수영·보디빌딩 등) 선정적이라고 잘못 보는 경우가 많아서:
+ * - 노골적: 아주 확실한 장면 1개(0.85 이상) 또는 비교적 확실한 장면 2개(0.6 이상)
+ * - 선정적(노출): 3개 이상일 때만, 스포츠 주제는 보지 않음
+ * - 스포츠 주제는 노골적 기준도 높게(0.9 1개 또는 0.75 2개)
+ */
+export function judgeFrames(frames: FrameVerdict[], options: ModerationOptions = {}): { blocked: boolean; reason: string | null } {
+  const strong = options.sports ? 0.9 : EXPLICIT_STRONG;
+  const likely = options.sports ? 0.75 : EXPLICIT_THRESHOLD;
+  const explicitScore = (f: FrameVerdict) => f.porn + f.hentai;
+  const strongCount = frames.filter(f => explicitScore(f) >= strong).length;
+  const likelyCount = frames.filter(f => explicitScore(f) >= likely).length;
+  if (strongCount >= 1 || likelyCount >= 2) return { blocked: true, reason: "노골적인 장면이 감지되어 제외했어요" };
   const suggestive = frames.filter(f => f.sexy >= SUGGESTIVE_THRESHOLD).length;
-  if (explicit) return { blocked: true, reason: "노골적인 장면이 감지되어 제외했어요" };
-  if (suggestive >= 2) return { blocked: true, reason: "선정적인 장면이 감지되어 제외했어요" };
+  if (!options.sports && suggestive >= SUGGESTIVE_MIN_FRAMES) return { blocked: true, reason: "선정적인 장면이 감지되어 제외했어요" };
   return { blocked: false, reason: null };
 }
 
@@ -249,5 +265,5 @@ export async function screenFrames(frames: HTMLCanvasElement[], options: Moderat
     const p = (name: string) => predictions.find(x => x.className === name)?.probability ?? 0;
     verdicts.push({ porn: p("Porn"), hentai: p("Hentai"), sexy: p("Sexy") });
   }
-  return judgeFrames(verdicts);
+  return judgeFrames(verdicts, options);
 }

@@ -152,3 +152,21 @@ describe("관련성 판정", () => {
     expect(expandQueries(son, []).at(-1)).toEqual({ q: "Son Heung-min Tottenham Hotspur F.C.", weight: 0.6, kind: "related" });
   });
 });
+
+describe("스포츠 주제 판별", () => {
+  it("종목·소속 팀이 있거나 설명에 선수·경기 말이 있으면 스포츠 주제", async () => {
+    const { isSportsEntity } = await import("./topic");
+    expect(isSportsEntity({ claims: { P641: [{}] } })).toBe(true); // 시릴 가네: 종목 = 종합격투기
+    expect(isSportsEntity({ descriptions: { en: { value: "French mixed martial artist" } } })).toBe(true);
+    expect(isSportsEntity({ descriptions: { ko: { value: "대한민국의 축구 선수" } } })).toBe(true);
+    expect(isSportsEntity({ descriptions: { en: { value: "South Korean girl group" } } })).toBe(false);
+    expect(isSportsEntity(null)).toBe(false);
+  });
+
+  it("특징 문장에 경기 관련 말이 있으면 스포츠로 본다", async () => {
+    const { mentionsSports } = await import("./topic");
+    expect(mentionsSports("UFC 녹아웃 하이라이트, 빠른 컷")).toBe(true);
+    expect(mentionsSports("격투기 경기")).toBe(true);
+    expect(mentionsSports("잔잔한 감성, 따뜻한 색감")).toBe(false);
+  });
+});
