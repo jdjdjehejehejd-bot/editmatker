@@ -7,7 +7,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, parseTopicInput } from "./topic";
+import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
@@ -185,6 +185,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     verdict: { blocked: boolean; reason: string | null };
   }
   interface Job {
+    topic: TopicResult;
     candidate: SourceVideo;
     controller: AbortController;
     promise: Promise<Prepared>;
@@ -209,7 +210,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples);
       // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
       if (!policy.nsfw) report("analyze", `${candidate.title} 장면 검열 중`);
-      const verdict = await screenFrames(analysis.keyframes, policy);
+      // 스포츠 선수 주제는 경기 중 노출(상의 탈의 등)을 선정성으로 보지 않습니다.
+      const verdict = await screenFrames(analysis.keyframes, { ...policy, sports: job.topic.info.sports || mentionsSports(input.features) });
       analysis.keyframes = [];
       return { url, analysis, verdict };
     } catch (error) {
@@ -226,7 +228,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       if (index >= topic.candidates.length) return;
       cursor.set(topic, index + 1);
       const controller = new AbortController();
-      const job: Job = { candidate: topic.candidates[index], controller, promise: Promise.resolve(null as never) };
+      const job: Job = { topic, candidate: topic.candidates[index], controller, promise: Promise.resolve(null as never) };
       job.promise = prepare(job);
       job.promise.catch(() => undefined); // 꺼내기 전에 실패해도 처리되지 않은 오류로 남지 않게
       queue.push(job);
@@ -382,7 +384,7 @@ async function learnStyle(
     try {
       events.step("learn", `참고 에딧 분석 중 · ${item.title}`, 0);
       const blob = await item.load();
-      references.push(await analyzeReference(blob, item.title, policy, ratio => events.step("learn", `참고 에딧 분석 중 · ${item.title}`, ratio), signal));
+      references.push(await analyzeReference(blob, item.title, { ...policy, sports: topic.sports || mentionsSports(input.features) }, ratio => events.step("learn", `참고 에딧 분석 중 · ${item.title}`, ratio), signal));
     } catch (error) {
       if (signal.aborted) throw error;
       notes.push(`참고 에딧 "${item.title.slice(0, 40)}": ${describeError(error)}`);

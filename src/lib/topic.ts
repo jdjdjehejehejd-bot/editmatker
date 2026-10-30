@@ -15,6 +15,22 @@ export interface TopicInfo {
   aliases?: string[];
   /** 관련 주제의 이름 (예: 소속 팀, 그룹, 종목, 대표작) */
   related?: string[];
+  /** 스포츠 선수·경기 주제인지 (장면 검열에서 경기 중 노출을 오탐하지 않으려고) */
+  sports?: boolean;
+}
+
+const SPORTS_WORDS = /athlete|player|footballer|fighter|boxer|wrestler|martial art|\bmma\b|ufc|swimmer|sprinter|cyclist|gymnast|bodybuilder|skater|tennis|golfer|olympi|선수|격투|복서|레슬러|수영|육상|체조|보디빌|축구|야구|농구|배구|테니스|골프|올림픽/i;
+
+/** 문장에 선수·경기 관련 말이 있는지 (주제를 Wikidata에서 못 찾았을 때 특징·분위기 문장으로 보조 판단) */
+export function mentionsSports(text: string | null | undefined): boolean {
+  return SPORTS_WORDS.test(text ?? "") || /경기|시합|하이라이트|\bko\b|knockout|녹아웃|골|득점|스포츠|sports?/i.test(text ?? "");
+}
+
+/** Wikidata의 종목(P641)·소속 팀(P54)이 있거나 설명에 선수·경기 관련 말이 있으면 스포츠 주제 */
+export function isSportsEntity(entity: any): boolean {
+  if (entity?.claims?.P641?.length || entity?.claims?.P54?.length) return true;
+  const descriptions = [entity?.descriptions?.en?.value, entity?.descriptions?.ko?.value].filter(Boolean).join(" ");
+  return SPORTS_WORDS.test(descriptions);
 }
 
 export interface SearchQuery {
@@ -158,6 +174,7 @@ export async function resolveTopic(query: string, signal?: AbortSignal, options:
       description: entity?.descriptions?.ko?.value ?? entity?.descriptions?.en?.value ?? null,
       commonsCategory: claimValues("P373")[0] ?? null,
       wikidataVideos: claimValues("P10"),
+      sports: isSportsEntity(entity),
       // 별칭·관련 주제에 금지어가 섞여 있으면 검색어로 쓰지 않습니다.
       aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowedWith(options, alias)),
       related: related.filter(item => isTextAllowedWith(options, item)),
