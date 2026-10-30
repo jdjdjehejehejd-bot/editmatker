@@ -21,6 +21,8 @@ export interface Highlight {
   start: number;
   length: number;
   score: number;
+  /** 이 영상이 편집에서 차지할 비중 (주제 가중치를 영상 수로 나눈 값, 기본 1) */
+  weight?: number;
 }
 
 export function normalize(values: number[]): number[] {

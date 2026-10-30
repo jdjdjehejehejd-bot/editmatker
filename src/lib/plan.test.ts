@@ -57,3 +57,13 @@ describe("buildPlan", () => {
     expect(buildPlan({ highlights: [], style: parseStyle(""), totalSeconds: 15 }).segments).toEqual([]);
   });
 });
+
+describe("가중 섞기", () => {
+  it("비중이 3배인 영상이 3배 자주 나온다", () => {
+    const many = (sourceId: string, weight: number) =>
+      Array.from({ length: 20 }, (_, i) => ({ sourceId, start: i * 5, length: 4, score: 0.5, weight }));
+    const order = interleaveBySource([...many("heavy", 0.75), ...many("light", 0.25)]).slice(0, 16);
+    expect(order.filter(h => h.sourceId === "heavy")).toHaveLength(12);
+    expect(order.filter(h => h.sourceId === "light")).toHaveLength(4);
+  });
+});

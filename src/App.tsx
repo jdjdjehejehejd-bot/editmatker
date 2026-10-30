@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { runPipeline, type LoadedSource, type PipelineResult, type StepId } from "./lib/pipeline";
+import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
+import { parseTopicInput } from "./lib/topic";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
 
@@ -39,7 +40,7 @@ export default function App() {
   const [step, setStep] = useState<{ id: StepId; detail: string; ratio?: number } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [candidates, setCandidates] = useState<SourceVideo[]>([]);
-  const [queries, setQueries] = useState<string[]>([]);
+  const [queries, setQueries] = useState<QueryGroup[]>([]);
   const [loaded, setLoaded] = useState<LoadedSource[]>([]);
   const [skipped, setSkipped] = useState<{ title: string; reason: string }[]>([]);
   const [result, setResult] = useState<PipelineResult | null>(null);
@@ -49,6 +50,8 @@ export default function App() {
   const stageRef = useRef<HTMLElement>(null);
   const abortRef = useRef<AbortController | null>(null);
   const preview = useMemo(() => parseStyle(features), [features]);
+  const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
+  const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
   const [width, height] = ASPECT_SIZE[aspect];
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
@@ -112,7 +115,7 @@ export default function App() {
         plan: pipeline.plan,
         style: pipeline.style,
         sources: pipeline.sources,
-        title: pipeline.topic.label,
+        title: pipeline.title,
         subtitle: pipeline.style.label,
         credits: pipeline.credits,
         music: pipeline.music,
@@ -152,7 +155,7 @@ export default function App() {
   const downloadPlan = () => {
     if (!result) return;
     const json = {
-      topic: result.topic,
+      topics: result.topics.map(({ info, weight, queries }) => ({ ...info, weight, queries })),
       style: { ...result.style, effects: [...result.style.effects] },
       plan: result.plan,
       sources: result.sources.map(({ analysis, scores, url, ...rest }) => rest),
@@ -187,8 +190,19 @@ export default function App() {
 
           <label className="field">
             <span>주제</span>
-            <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="예: 아폴로 11호, 고양이, 서울, Formula 1" maxLength={80} onKeyDown={e => e.key === "Enter" && start()} />
+            <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="예: 손흥민, 3:케인:, 토트넘" maxLength={200} onKeyDown={e => e.key === "Enter" && start()} />
+            <small className="hint">여러 주제는 쉼표로 나눠요. <code>3:케인:</code>처럼 쓰면 그 주제가 3배 비중으로 들어가요.</small>
           </label>
+          {topicSpecs.length > 1 || topicSpecs.some(spec => spec.weight !== 1) ? (
+            <div className="topic-chips" aria-label="주제 비중">
+              {topicSpecs.map(spec => (
+                <span key={spec.term}>
+                  {spec.term}
+                  <b>{Math.round((spec.weight / topicWeightSum) * 100)}%</b>
+                </span>
+              ))}
+            </div>
+          ) : null}
 
           <label className="field">
             <span>특징 · 분위기</span>
@@ -319,9 +333,13 @@ export default function App() {
           </ol>
           {queries.length > 0 && (
             <div className="queries">
-              <span>검색어</span>
-              {queries.map(q => (
-                <em key={q}>{q}</em>
+              {queries.map(group => (
+                <div key={group.label}>
+                  <span>{queries.length > 1 ? `${group.label}${group.weight !== 1 ? ` ×${group.weight}` : ""}` : "검색어"}</span>
+                  {group.queries.map(q => (
+                    <em key={q}>{q}</em>
+                  ))}
+                </div>
               ))}
             </div>
           )}
@@ -389,6 +407,7 @@ export default function App() {
                     <i style={{ background: colorOf(source.id) }} />
                     {source.title}
                   </a>
+                  {loaded.some(other => other.topicLabel !== source.topicLabel) && <small className="topic-tag">{source.topicLabel}</small>}
                   <small>
                     {source.author} ·{" "}
                     {source.licenseUrl ? (

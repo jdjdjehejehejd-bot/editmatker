@@ -6,8 +6,8 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { expandQueries } from "./topic";
-import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SourceVideo, type TopicInfo } from "./sources";
+import { allocateSlots, combinedTitle, expandQueries, parseTopicInput } from "./topic";
+import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
 export type StepId = "topic" | "search" | "download" | "analyze" | "plan" | "render";
@@ -17,9 +17,12 @@ export interface LoadedSource extends SourceVideo {
   analysis: VideoAnalysis;
   scores: number[];
   highlights: Highlight[];
+  /** 이 영상을 찾은 주제 */
+  topicLabel: string;
 }
 
 export interface PipelineInput {
+  /** 쉼표로 여러 주제, "N:단어:"로 N배 비중 */
   topic: string;
   features: string;
   seconds: number;
@@ -30,8 +33,17 @@ export interface PipelineInput {
   musicFile: File | null;
 }
 
+export interface TopicResult {
+  info: TopicInfo;
+  weight: number;
+  queries: string[];
+  candidates: SourceVideo[];
+  reports: SearchReport[];
+}
+
 export interface PipelineResult {
-  topic: TopicInfo;
+  topics: TopicResult[];
+  title: string;
   style: EditStyle;
   sources: LoadedSource[];
   plan: EditPlan;
@@ -39,30 +51,55 @@ export interface PipelineResult {
   credits: string[];
 }
 
+export interface QueryGroup {
+  label: string;
+  weight: number;
+  queries: string[];
+}
+
 export interface PipelineEvents {
   step: (id: StepId, detail: string, ratio?: number) => void;
   candidates: (sources: SourceVideo[]) => void;
-  queries: (queries: string[]) => void;
+  queries: (groups: QueryGroup[]) => void;
   loaded: (source: LoadedSource) => void;
   skipped: (source: SourceVideo, reason: string) => void;
 }
 
+/** 여러 주제를 동시에 쓸 때 한 번에 받을 영상 수의 상한 */
+const MAX_TOTAL_SOURCES = 8;
+
 export async function runPipeline(input: PipelineInput, events: PipelineEvents, signal: AbortSignal): Promise<PipelineResult> {
   const style = parseStyle(input.features);
+  const specs = parseTopicInput(input.topic);
+  if (!specs.length) throw new Error("주제를 입력해 주세요.");
 
-  events.step("topic", `"${input.topic}" 주제를 해석하는 중`);
-  const topic = await resolveTopic(input.topic, signal);
+  events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
+  const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal)));
 
   const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
-  const queries = input.licenseMode === "any" ? expandQueries(topic, style.searchHints).map(q => q.q) : [topic.englishLabel ?? topic.label, ...(topic.related ?? []).slice(0, 3)];
-  events.queries(queries);
-  events.step("search", `${where}에서 ${queries.length}가지 검색어로 찾는 중`);
-  const { sources: candidates, reports } = await findSources(topic, style.searchHints, input.licenseMode, input.helper, signal);
-  events.candidates(candidates);
-  if (!candidates.length) {
+  const queriesFor = (info: TopicInfo) =>
+    input.licenseMode === "any" ? expandQueries(info, style.searchHints).map(q => q.q) : [info.englishLabel ?? info.label, ...(info.related ?? []).slice(0, 3)];
+  const groups = infos.map((info, i) => ({ label: info.label, weight: specs[i].weight, queries: queriesFor(info) }));
+  events.queries(groups);
+  const queryCount = groups.reduce((sum, g) => sum + g.queries.length, 0);
+  events.step("search", `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
+  const found = await Promise.all(infos.map(info => findSources(info, style.searchHints, input.licenseMode, input.helper, signal)));
+
+  // 여러 주제에 같은 영상이 걸리면 먼저 나온 주제에만 둡니다.
+  const claimed = new Set<string>();
+  const topics: TopicResult[] = infos.map((info, i) => {
+    const candidates = found[i].sources.filter(source => !claimed.has(source.id));
+    candidates.forEach(source => claimed.add(source.id));
+    return { info, weight: specs[i].weight, queries: groups[i].queries, candidates, reports: found[i].reports };
+  });
+  events.candidates(topics.flatMap(t => t.candidates));
+  const active = topics.filter(t => t.candidates.length);
+  if (!active.length) {
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
-    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.\n\n${summarizeReports(reports)}`);
+    const details = topics.map(t => (topics.length > 1 ? `[${t.info.label}]\n` : "") + summarizeReports(t.reports)).join("\n\n");
+    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.\n\n${details}`);
   }
+  const failures: string[] = topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`);
 
   // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다.
   const userMusic = input.musicFile ? await prepareUserMusic(input.musicFile, input.seconds) : null;
@@ -70,40 +107,79 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const highlightLength = requiredHighlightLength(style, bpm);
   const approxCuts = Math.ceil(input.seconds / ((60 / bpm) * 2));
 
+  // 영상 칸을 주제 비중대로 나눕니다. 주제가 많으면 주제마다 최소 1개는 받습니다.
+  const slots = Math.min(MAX_TOTAL_SOURCES, Math.max(input.sourceCount, active.length));
+  const quota = allocateSlots(active.map(t => t.weight), slots);
+  const totalWeight = active.reduce((sum, t) => sum + t.weight, 0);
+
   const loaded: LoadedSource[] = [];
-  const failures: string[] = [];
-  for (const candidate of candidates) {
-    if (loaded.length >= input.sourceCount) break;
-    if (signal.aborted) throw new DOMException("Aborted", "AbortError");
-    try {
-      events.step("download", `${loaded.length + 1}/${input.sourceCount} · ${candidate.title}`, 0);
-      const blob = await downloadSource(candidate, ratio => events.step("download", `${loaded.length + 1}/${input.sourceCount} · ${candidate.title}`, ratio), signal, LIMITS.sourceBytes);
-      const url = URL.createObjectURL(blob);
+  const loadedBy = new Map<TopicResult, LoadedSource[]>(active.map(t => [t, []]));
+  const cursor = new Map<TopicResult, number>(active.map(t => [t, 0]));
+
+  const tryNext = async (topic: TopicResult, perSource: number): Promise<boolean> => {
+    let index = cursor.get(topic)!;
+    while (index < topic.candidates.length) {
+      const candidate = topic.candidates[index++];
+      cursor.set(topic, index);
+      if (signal.aborted) throw new DOMException("Aborted", "AbortError");
+      const label = `${loaded.length + 1}/${slots} · ${candidate.title}`;
       try {
-        events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
-        const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
-        const scores = scoreSamples(analysis.samples, style.weights);
-        const length = Math.min(highlightLength, analysis.duration * 0.5);
-        const perSource = Math.ceil(approxCuts / input.sourceCount) + 2;
-        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
-        if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
-        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights };
-        loaded.push(source);
-        events.loaded(source);
+        events.step("download", label, 0);
+        const blob = await downloadSource(candidate, ratio => events.step("download", label, ratio), signal, LIMITS.sourceBytes);
+        const url = URL.createObjectURL(blob);
+        try {
+          events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
+          const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
+          const scores = scoreSamples(analysis.samples, style.weights);
+          const length = Math.min(highlightLength, analysis.duration * 0.5);
+          const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
+          if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
+          const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
+          loaded.push(source);
+          loadedBy.get(topic)!.push(source);
+          events.loaded(source);
+          return true;
+        } catch (error) {
+          URL.revokeObjectURL(url);
+          throw error;
+        }
       } catch (error) {
-        URL.revokeObjectURL(url);
-        throw error;
+        if (signal.aborted) throw error;
+        const reason = describeError(error);
+        failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
+        events.skipped(candidate, reason);
       }
-    } catch (error) {
-      if (signal.aborted) throw error;
-      const reason = describeError(error);
-      failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
-      events.skipped(candidate, reason);
+    }
+    return false;
+  };
+
+  // 1) 주제별 몫을 채웁니다 (비중이 큰 주제부터).
+  const byWeight = active.map((t, i) => ({ t, q: quota[i] })).sort((a, b) => b.t.weight - a.t.weight);
+  for (const { t, q } of byWeight) {
+    const perSource = Math.ceil((approxCuts * (t.weight / totalWeight)) / Math.max(1, q)) + 2;
+    while (loadedBy.get(t)!.length < q && (await tryNext(t, perSource))) {
+      /* 몫을 채울 때까지 */
     }
   }
+  // 2) 영상이 모자란 주제가 있으면 남은 칸을 다른 주제의 다음 후보로 채웁니다.
+  for (let progress = true; loaded.length < slots && progress; ) {
+    progress = false;
+    for (const { t } of byWeight) {
+      if (loaded.length >= slots) break;
+      if (await tryNext(t, Math.ceil(approxCuts / slots) + 2)) progress = true;
+    }
+  }
+
   if (!loaded.length) {
     const more = failures.length > 6 ? `\n…외 ${failures.length - 6}개` : "";
     throw new Error(`찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요.\n\n${failures.slice(0, 6).join("\n")}${more}`);
+  }
+
+  // 편집에서 각 주제가 비중만큼 나오도록, 주제 비중을 그 주제의 영상 수로 나눠 영상마다 나눠 줍니다.
+  const usedWeight = active.filter(t => loadedBy.get(t)!.length).reduce((sum, t) => sum + t.weight, 0);
+  for (const t of active) {
+    const sources = loadedBy.get(t)!;
+    for (const source of sources) for (const h of source.highlights) h.weight = t.weight / usedWeight / sources.length;
   }
 
   events.step("plan", "비트에 맞춰 컷을 배치하는 중");
@@ -129,5 +205,6 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     .map(s => `"${s.title}" — ${s.author} · ${s.license} · ${s.provider}`);
   if (!userMusic) credits.push("Music: generated by editmatker");
 
-  return { topic, style, sources: loaded, plan, music, credits };
+  const title = combinedTitle(active.filter(t => loadedBy.get(t)!.length).map(t => t.info.label));
+  return { topics, title, style, sources: loaded, plan, music, credits };
 }

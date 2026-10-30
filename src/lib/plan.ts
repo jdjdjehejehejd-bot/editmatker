@@ -52,18 +52,28 @@ export function requiredHighlightLength(style: EditStyle, bpm = style.bpm) {
   return Math.min(6, Math.max(1, beatsToSeconds(longest, bpm) * rate));
 }
 
-/** 출처별로 번갈아 가며 점수 순으로 섞어 같은 영상이 연달아 나오지 않게 합니다. */
+/**
+ * 출처별로 번갈아 가며 점수 순으로 섞어 같은 영상이 연달아 나오지 않게 합니다.
+ * 영상마다 비중(weight)이 다르면 그 비율대로 자주 나오게 합니다(부드러운 가중 라운드 로빈).
+ */
 export function interleaveBySource(highlights: Highlight[]): Highlight[] {
   const groups = new Map<string, Highlight[]>();
   for (const h of [...highlights].sort((a, b) => b.score - a.score)) {
     if (!groups.has(h.sourceId)) groups.set(h.sourceId, []);
     groups.get(h.sourceId)!.push(h);
   }
-  const lists = [...groups.values()];
+  const lanes = [...groups.values()].map(list => ({ list, next: 0, weight: Math.max(0.01, list[0].weight ?? 1), current: 0 }));
   const result: Highlight[] = [];
-  for (let round = 0; result.length < highlights.length; round++) {
-    const layer = lists.map(list => list[round]).filter(Boolean).sort((a, b) => b.score - a.score);
-    result.push(...layer);
+  while (result.length < highlights.length) {
+    const open = lanes.filter(lane => lane.next < lane.list.length);
+    const total = open.reduce((sum, lane) => sum + lane.weight, 0);
+    for (const lane of open) lane.current += lane.weight;
+    // 동점이면 다음 장면 점수가 높은 쪽을 먼저 씁니다.
+    const pick = open.reduce((best, lane) =>
+      lane.current > best.current + 1e-9 || (Math.abs(lane.current - best.current) <= 1e-9 && lane.list[lane.next].score > best.list[best.next].score) ? lane : best
+    );
+    pick.current -= total;
+    result.push(pick.list[pick.next++]);
   }
   return result;
 }

@@ -188,3 +188,78 @@ export function expandQueries(topic: TopicInfo, hints: string[], max = 7): Searc
   for (const related of (topic.related ?? []).slice(0, 3)) push(related, 0.6, "related");
   return list.slice(0, max);
 }
+
+// ---------------------------------------------------------------------------
+// 여러 주제 입력: "손흥민, 3:케인:, 토트넘" → 쉼표로 나누고, N:단어: 는 N배 비중
+
+export interface TopicSpec {
+  term: string;
+  weight: number;
+}
+
+export const MAX_TOPICS = 6;
+const WEIGHTED = /^(\d+(?:\.\d+)?)\s*[:：]\s*(.+?)\s*[:：]?$/;
+
+export function parseTopicInput(input: string): TopicSpec[] {
+  const specs: TopicSpec[] = [];
+  for (const part of input.split(/[,，、\n]/)) {
+    const text = part.trim();
+    if (!text) continue;
+    let match = WEIGHTED.exec(text);
+    // "12:00 뉴스"처럼 끝 콜론 없이 숫자가 이어지면 비중 표시가 아니라 주제명으로 봅니다.
+    if (match && !/[:：]$/.test(text) && /^\d/.test(match[2])) match = null;
+    const term = (match ? match[2] : text).replace(/^[:：]+|[:：]+$/g, "").trim();
+    const weight = match ? Math.min(10, Math.max(0.1, Number(match[1]))) : 1;
+    if (!term) continue;
+    const existing = specs.find(spec => spec.term.toLowerCase() === term.toLowerCase());
+    if (existing) existing.weight = Math.max(existing.weight, weight);
+    else specs.push({ term, weight });
+  }
+  return specs.slice(0, MAX_TOPICS);
+}
+
+/**
+ * 전체 칸 수를 가중치에 비례해 나눕니다(최대 나머지 방식).
+ * 칸이 주제 수보다 많으면 모든 주제가 최소 1칸을 받습니다.
+ */
+export function allocateSlots(weights: number[], total: number): number[] {
+  const n = weights.length;
+  if (!n || total <= 0) return weights.map(() => 0);
+  const order = weights.map((w, i) => i).sort((a, b) => weights[b] - weights[a]);
+  const result = weights.map(() => 0);
+  let remaining = total;
+  if (total >= n) {
+    result.fill(1);
+    remaining -= n;
+  }
+  const sum = weights.reduce((a, b) => a + b, 0) || 1;
+  const exact = weights.map(w => (w / sum) * total);
+  // 이미 받은 1칸을 빼고 모자란 만큼을 나눕니다.
+  const want = exact.map((e, i) => Math.max(0, e - result[i]));
+  const floors = want.map(w => Math.floor(w));
+  const floorSum = floors.reduce((a, b) => a + b, 0);
+  if (floorSum > remaining) {
+    // 정수 부분만으로도 넘치면 가중치가 큰 주제부터 채웁니다.
+    for (const i of order) {
+      const take = Math.min(floors[i], remaining);
+      result[i] += take;
+      remaining -= take;
+    }
+    return result;
+  }
+  floors.forEach((f, i) => (result[i] += f));
+  remaining -= floorSum;
+  const byRemainder = want.map((w, i) => i).sort((a, b) => want[b] - floors[b] - (want[a] - floors[a]) || weights[b] - weights[a]);
+  for (const i of byRemainder) {
+    if (remaining <= 0) break;
+    result[i]++;
+    remaining--;
+  }
+  return result;
+}
+
+/** 편집 제목: "손흥민 × 케인 × 토트넘" */
+export function combinedTitle(labels: string[]): string {
+  if (labels.length <= 3) return labels.join(" × ");
+  return `${labels.slice(0, 3).join(" × ")} 외 ${labels.length - 3}`;
+}
