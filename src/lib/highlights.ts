@@ -35,11 +35,15 @@ export function normalize(values: number[]): number[] {
   return values.map(v => Math.min(1, Math.max(0, (v - lo) / range)));
 }
 
-export function detectCuts(motion: number[]): boolean[] {
+/**
+ * 장면 전환 감지. 기본값은 원본 영상용(큰 변화만), 참고 에딧의 컷을 셀 때는 더 민감하게 씁니다.
+ * @param threshold 최소 픽셀 차이  @param ratio 주변 평균보다 몇 배 커야 하는지
+ */
+export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boolean[] {
   return motion.map((value, i) => {
     const window = motion.slice(Math.max(0, i - 4), i).concat(motion.slice(i + 1, i + 5));
     const avg = window.length ? window.reduce((a, b) => a + b, 0) / window.length : 0;
-    return value > 0.22 && value > avg * 3;
+    return value > threshold && value > avg * ratio;
   });
 }
 
