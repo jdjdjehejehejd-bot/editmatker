@@ -51,34 +51,46 @@ export interface FocusPoint {
 
 /** 관심 지점을 시간에 따라 부드럽게 만듭니다(±window초 평균) — 카메라가 덜덜 떨지 않게. */
 export function smoothTrack(points: FocusPoint[], window = 0.8): FocusPoint[] {
-  return points.map(point => {
-    let sx = 0;
-    let sy = 0;
-    let n = 0;
-    for (const other of points) {
-      if (Math.abs(other.t - point.t) <= window) {
-        sx += other.x;
-        sy += other.y;
-        n++;
-      }
+  // 시간순 점에 대해 창을 밀어 가며 합을 갱신합니다(점마다 전체를 다시 더하지 않음). 결과는 같습니다.
+  const result: FocusPoint[] = [];
+  let lo = 0;
+  let hi = 0;
+  let sx = 0;
+  let sy = 0;
+  for (const point of points) {
+    while (hi < points.length && points[hi].t - point.t <= window) {
+      sx += points[hi].x;
+      sy += points[hi].y;
+      hi++;
     }
-    return { t: point.t, x: sx / n, y: sy / n };
-  });
+    while (point.t - points[lo].t > window) {
+      sx -= points[lo].x;
+      sy -= points[lo].y;
+      lo++;
+    }
+    const n = hi - lo;
+    result.push({ t: point.t, x: sx / n, y: sy / n });
+  }
+  return result;
 }
 
 /** 시각 t의 관심 지점 (앞뒤 점 사이를 이어서) */
 export function focusAt(track: FocusPoint[], t: number): { x: number; y: number } {
   if (!track.length) return { x: 0.5, y: 0.5 };
   if (t <= track[0].t) return track[0];
-  for (let i = 1; i < track.length; i++) {
-    if (t <= track[i].t) {
-      const a = track[i - 1];
-      const b = track[i];
-      const k = (t - a.t) / (b.t - a.t || 1);
-      return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
-    }
+  if (t >= track[track.length - 1].t) return track[track.length - 1];
+  // 렌더링 중 매 프레임 부르므로 처음부터 훑지 않고 이분 탐색으로 찾습니다.
+  let lo = 0;
+  let hi = track.length - 1;
+  while (hi - lo > 1) {
+    const mid = (lo + hi) >> 1;
+    if (track[mid].t < t) lo = mid;
+    else hi = mid;
   }
-  return track[track.length - 1];
+  const a = track[lo];
+  const b = track[hi];
+  const k = (t - a.t) / (b.t - a.t || 1);
+  return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
 }
 
 /**

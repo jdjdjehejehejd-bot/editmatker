@@ -187,18 +187,21 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다(NSFW 모드에서는 받지 않음).
   preloadClassifier(policy);
 
-  // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다.
-  // 참고 에딧에서 컷 리듬·템포·색감·효과를 배워 스타일에 반영합니다(하이라이트 길이·템포를 정하기 전에).
-  const profile = input.learnOnline || input.referenceFiles.length ? await learnStyle(input, active.reduce((a, b) => (b.weight > a.weight ? b : a)).info, style, policy, events, signal, failures) : null;
-  style = applyProfile(style, profile);
-
-  const userMusic = input.musicFile ? await prepareUserMusic(input.musicFile, input.seconds) : null;
-  // 배경음악 스타일을 고르면 그 장르로 작곡하고, 템포를 직접 정하지 않았으면 장르의 기본 템포로 컷도 맞춥니다.
-  const musicMood: Mood = !input.musicStyle || input.musicStyle === "auto" ? style.mood : input.musicStyle;
-  if (!userMusic && musicMood !== style.mood && !style.bpmExplicit && !profile?.bpm) style = { ...style, bpm: defaultBpm(musicMood) };
-  const bpm = userMusic?.bpm ?? style.bpm;
-  const highlightLength = requiredHighlightLength(style, bpm);
-  const approxCuts = Math.ceil(input.seconds / ((60 / bpm) * 2));
+  // 속도: 참고 에딧 학습과 내 음악 분석은 원본 영상 받기·분석과 동시에 진행합니다.
+  // 원본 영상 분석은 배운 스타일과 무관하고, 배운 값(템포·컷 리듬)은 하이라이트를 고를 때(꺼낼 때) 반영하므로 결과는 같습니다.
+  const learnPromise =
+    input.learnOnline || input.referenceFiles.length ? learnStyle(input, active.reduce((a, b) => (b.weight > a.weight ? b : a)).info, style, policy, events, signal, failures) : Promise.resolve(null);
+  const musicPromise = input.musicFile ? prepareUserMusic(input.musicFile, input.seconds) : Promise.resolve(null);
+  // 다른 곳에서 먼저 실패해 기다리지 못하게 돼도 처리되지 않은 오류로 남지 않게
+  learnPromise.catch(() => undefined);
+  musicPromise.catch(() => undefined);
+  let profile: StyleProfile | null = null;
+  let userMusic: Awaited<typeof musicPromise> = null;
+  let musicMood: Mood = style.mood;
+  // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다(아래에서 학습·음악 분석이 끝나면 정함).
+  let bpm = style.bpm;
+  let highlightLength = 0;
+  let approxCuts = 0;
 
   // 영상 칸을 주제 비중대로 나눕니다. 주제가 많으면 주제마다 최소 1개는 받습니다.
   const slots = Math.min(MAX_TOTAL_SOURCES, Math.max(input.sourceCount, active.length));
@@ -337,8 +340,22 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   };
 
   try {
-    // 1) 주제별 몫을 채웁니다 (비중이 큰 주제부터).
     const byWeight = active.map((t, i) => ({ t, q: quota[i] })).sort((a, b) => b.t.weight - a.t.weight);
+    // 학습·음악 분석을 기다리는 동안 원본 영상을 미리 받아 분석해 둡니다.
+    for (const { t, q } of byWeight) enqueue(t, q);
+
+    // 참고 에딧에서 컷 리듬·템포·색감·효과를 배워 스타일에 반영합니다(하이라이트 길이·템포를 정하기 전에).
+    profile = await learnPromise;
+    style = applyProfile(style, profile);
+    userMusic = await musicPromise;
+    // 배경음악 스타일을 고르면 그 장르로 작곡하고, 템포를 직접 정하지 않았으면 장르의 기본 템포로 컷도 맞춥니다.
+    musicMood = !input.musicStyle || input.musicStyle === "auto" ? style.mood : input.musicStyle;
+    if (!userMusic && musicMood !== style.mood && !style.bpmExplicit && !profile?.bpm) style = { ...style, bpm: defaultBpm(musicMood) };
+    bpm = userMusic?.bpm ?? style.bpm;
+    highlightLength = requiredHighlightLength(style, bpm);
+    approxCuts = Math.ceil(input.seconds / ((60 / bpm) * 2));
+
+    // 1) 주제별 몫을 채웁니다 (비중이 큰 주제부터).
     for (const { t, q } of byWeight) {
       const perSource = Math.ceil((approxCuts * (t.weight / totalWeight)) / Math.max(1, q)) + 2;
       while (loadedBy.get(t)!.length < q && (await tryNext(t, perSource, q - loadedBy.get(t)!.length))) {

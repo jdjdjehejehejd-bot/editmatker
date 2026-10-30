@@ -56,3 +56,42 @@ describe("자동 리프레이밍", () => {
     expect(cropOffset(0, 1280, 720)).toBe(0); // 왼쪽 끝에서 멈춤
   });
 });
+
+describe("최적화한 경로 계산이 예전과 같은 결과", () => {
+  // 최적화 전 구현 그대로
+  const oldSmooth = (points: { t: number; x: number; y: number }[], window = 0.8) =>
+    points.map(point => {
+      let sx = 0, sy = 0, n = 0;
+      for (const other of points) if (Math.abs(other.t - point.t) <= window) { sx += other.x; sy += other.y; n++; }
+      return { t: point.t, x: sx / n, y: sy / n };
+    });
+  const oldFocusAt = (track: { t: number; x: number; y: number }[], t: number) => {
+    if (!track.length) return { x: 0.5, y: 0.5 };
+    if (t <= track[0].t) return track[0];
+    for (let i = 1; i < track.length; i++) {
+      if (t <= track[i].t) {
+        const a = track[i - 1], b = track[i], k = (t - a.t) / (b.t - a.t || 1);
+        return { x: a.x + (b.x - a.x) * k, y: a.y + (b.y - a.y) * k };
+      }
+    }
+    return track[track.length - 1];
+  };
+
+  it("무작위 경로 100개로 비교", () => {
+    let seed = 7;
+    const rand = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+    for (let run = 0; run < 100; run++) {
+      let t = 0;
+      const points = Array.from({ length: 5 + Math.floor(rand() * 200) }, () => ({ t: (t += 0.05 + rand() * 0.6), x: rand(), y: rand() }));
+      const a = smoothTrack(points), b = oldSmooth(points);
+      a.forEach((p, i) => { expect(p.x).toBeCloseTo(b[i].x, 9); expect(p.y).toBeCloseTo(b[i].y, 9); });
+      for (let k = 0; k < 20; k++) {
+        const q = rand() * (t + 1) - 0.5;
+        const n = focusAt(a, q), o = oldFocusAt(a, q);
+        expect(n.x).toBeCloseTo(o.x, 12);
+        expect(n.y).toBeCloseTo(o.y, 12);
+      }
+      expect(focusAt(a, a[3]?.t ?? 0)).toEqual(oldFocusAt(a, a[3]?.t ?? 0));
+    }
+  });
+});
