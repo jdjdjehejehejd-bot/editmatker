@@ -274,17 +274,16 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
     }
   };
 
+  // 속도: 모든 요청을 한꺼번에 보내고, 결과는 원래 순서(대표 영상 → 분류 → 이름 검색)대로 반영해 우선순위를 지킵니다.
   // 주제와 직접 연결된 영상: Wikidata 대표 영상, 주제의 Commons 분류
-  if (topic.wikidataVideos.length) {
-    const titles = topic.wikidataVideos.slice(0, 20).map(name => `File:${name}`).join("|");
-    add(await commonsQuery({ titles }, signal).catch(() => []), 3, true);
-  }
-  if (topic.commonsCategory) {
-    const pages = await commonsQuery({ generator: "search", gsrsearch: `filetype:video incategory:"${topic.commonsCategory.replace(/"/g, "")}"`, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(() => []);
-    add(pages, 2.6, true);
-  }
+  const representative = topic.wikidataVideos.length
+    ? commonsQuery({ titles: topic.wikidataVideos.slice(0, 20).map(name => `File:${name}`).join("|") }, signal).catch(() => [])
+    : Promise.resolve([]);
+  const category = topic.commonsCategory
+    ? commonsQuery({ generator: "search", gsrsearch: `filetype:video incategory:"${topic.commonsCategory.replace(/"/g, "")}"`, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(() => [])
+    : Promise.resolve([]);
   const queries = buildCommonsQueries(topic, hints);
-  const results = await Promise.all(
+  const searches = Promise.all(
     queries.map(q =>
       commonsQuery({ generator: "search", gsrsearch: q, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(error => {
         errors.push(error);
@@ -292,6 +291,9 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
       })
     )
   );
+  const [representativePages, categoryPages, results] = await Promise.all([representative, category, searches]);
+  add(representativePages, 3, true);
+  add(categoryPages, 2.6, true);
   results.forEach((pages, i) => add(pages, 2 - i * 0.2));
   if (stats) stats.scanned += seen.size;
   if (errors.length === queries.length && queries.length) throw errors[0];
