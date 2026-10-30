@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
@@ -250,7 +250,7 @@ export default function App() {
           <div className="row">
             <label className="field">
               <span>사용할 영상 수 · {sourceCount}개</span>
-              <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} />
+              <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} style={{ "--fill": `${((sourceCount - 2) / (LIMITS.maxSources - 2)) * 100}%` } as CSSProperties} />
             </label>
             <label className="field">
               <span>배경음악</span>
