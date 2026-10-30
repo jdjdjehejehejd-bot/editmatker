@@ -109,14 +109,15 @@ describe("검색 보조", () => {
     expect(buildArchiveQuery(topic, [], "any")).toContain("NOT collection:(inlibrary");
   });
 
-  it("작은 mp4 파일을 고른다", () => {
+  it("재생할 수 있는 가장 작은 영상 파일을 고른다 (mp4·webm·ogv)", () => {
     const file = pickArchiveFile([
-      { name: "a.ogv", size: "100" },
+      { name: "a.txt", size: "10" },
       { name: "big.mp4", size: String(500 * 1024 * 1024) },
       { name: "a_512kb.mp4", size: "30000000", length: "02:30" },
       { name: "a.mp4", size: "60000000", length: "150" },
     ]);
     expect(file).toEqual({ name: "a_512kb.mp4", bytes: 30_000_000, duration: 150 });
+    expect(pickArchiveFile([{ name: "a.ogv", size: "100" }, { name: "a.mp4", size: "200" }])?.name).toBe("a.ogv");
   });
 
   it("제목에 주제가 들어간 영상을 우선한다", () => {
@@ -146,10 +147,40 @@ describe("검색 결과 요약", () => {
     ).toBe(
       [
         "Reddit: 실패 — 응답 오류 403",
-        "Wikimedia Commons: 7개 찾았지만 쓸 수 있는 영상 없음(길이·형식·라이선스 조건)",
+        "Wikimedia Commons: 7개 찾았지만 쓸 수 있는 영상 없음",
         "Internet Archive: 검색 결과 없음",
         "YouTube: 3개",
       ].join("\n")
+    );
+  });
+});
+
+describe("못 쓴 이유", () => {
+  it("Commons 파일마다 탈락 이유를 알려 준다", async () => {
+    const { inspectCommonsPage, REASON } = await import("./sources");
+    const base = { mediatype: "VIDEO", duration: 60, extmetadata: { LicenseShortName: { value: "CC0" } }, derivatives: [{ src: "https://upload.wikimedia.org/a.webm", type: "video/webm", height: 480, bandwidth: 1000 }] };
+    const noWebm = (mime: string) => !mime.includes("webm");
+    expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [base] }, 1, "any", noWebm).reason).toBe(REASON.format);
+    expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [{ ...base, duration: 4000 }] }, 1, "any").reason).toBe(REASON.length);
+    expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [{ ...base, extmetadata: { LicenseShortName: { value: "CC BY-NC 4.0" } } }] }, 1, "reusable").reason).toBe(REASON.license);
+    expect(inspectCommonsPage({ title: "File:a.jpg", imageinfo: [{ mediatype: "BITMAP" }] }, 1, "any").reason).toBeNull();
+  });
+
+  it("Internet Archive는 mp4·webm·ogv 중 재생 가능한 가장 작은 파일을 고르고, 못 쓰면 이유를 준다", async () => {
+    const { inspectArchiveFiles, REASON } = await import("./sources");
+    expect(inspectArchiveFiles([{ name: "a.ogv", size: "1000", length: "60" }, { name: "a.mp4", size: "5000", length: "60" }]).file?.name).toBe("a.ogv");
+    expect(inspectArchiveFiles([{ name: "a.ogv", size: "1000" }], m => m === "video/mp4").reason).toBe(REASON.format);
+    expect(inspectArchiveFiles([{ name: "a.txt" }]).reason).toBe(REASON.noVideo);
+    expect(inspectArchiveFiles([{ name: "film.mp4", size: "1000", length: "02:30:00" }]).reason).toBe(REASON.length);
+    expect(inspectArchiveFiles([{ name: "film.mp4", size: String(900 * 1024 * 1024), length: "40:00" }]).reason).toBe(REASON.size);
+    // 40분짜리라도 파일이 작으면 쓸 수 있다(예전엔 25분 넘으면 무조건 뺐음)
+    expect(inspectArchiveFiles([{ name: "talk.mp4", size: "50000000", length: "40:00" }]).file?.name).toBe("talk.mp4");
+  });
+
+  it("오류 메시지에 가장 흔한 이유를 보여 준다", async () => {
+    const { summarizeReports } = await import("./sources");
+    expect(summarizeReports([{ provider: "Internet Archive", usable: 0, scanned: 10, rejected: { "너무 짧거나 김": 6, "파일이 너무 큼": 3, "영상 파일 없음": 1 } }])).toBe(
+      "Internet Archive: 10개 찾았지만 쓸 수 있는 영상 없음 — 너무 짧거나 김 6개, 파일이 너무 큼 3개, 영상 파일 없음 1개"
     );
   });
 });

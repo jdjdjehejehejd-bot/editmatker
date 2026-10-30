@@ -44,15 +44,36 @@ export interface SearchReport {
   usable: number;
   /** 검색에 걸린 영상 수 (걸렀거나 재생할 수 없는 것 포함) */
   scanned: number;
+  /** 쓰지 못한 이유별 개수 */
+  rejected?: Record<string, number>;
   error?: string;
 }
 
-export type SearchStats = { scanned: number };
+export type SearchStats = { scanned: number; rejected?: Record<string, number> };
+
+/** 쓰지 못한 영상의 이유를 셉니다 (영상을 못 찾았을 때 진짜 이유를 보여 주려고). */
+export function reject(stats: SearchStats | undefined, reason: string) {
+  if (!stats) return;
+  stats.rejected ??= {};
+  stats.rejected[reason] = (stats.rejected[reason] ?? 0) + 1;
+}
+
+export const REASON = {
+  length: "너무 짧거나 김",
+  license: "라이선스 조건",
+  author: "작성자 표기 없음",
+  format: "이 기기에서 재생할 수 없는 형식",
+  size: "파일이 너무 큼",
+  noVideo: "영상 파일 없음",
+  metadata: "영상 정보를 읽지 못함",
+  restricted: "내려받기 제한",
+} as const;
 
 
 export const MAX_SOURCE_BYTES = 150 * 1024 * 1024;
 const MIN_DURATION = 3;
 const MAX_DURATION = 25 * 60;
+const MAX_ARCHIVE_DURATION = 90 * 60;
 
 type CanPlay = (mime: string) => boolean;
 
@@ -153,20 +174,26 @@ function isUploadHost(url: string) {
 }
 
 export function parseCommonsPage(page: any, relevance: number, mode: LicenseMode = "reusable", canPlay: CanPlay = defaultCanPlay): SourceVideo | null {
+  return inspectCommonsPage(page, relevance, mode, canPlay).source;
+}
+
+/** Commons 파일을 판정하고, 못 쓰면 이유를 돌려줍니다. 영상이 아닌 파일은 이유 없이 건너뜁니다. */
+export function inspectCommonsPage(page: any, relevance: number, mode: LicenseMode = "reusable", canPlay: CanPlay = defaultCanPlay): { source: SourceVideo | null; reason: string | null } {
+  const skip = (reason: string | null) => ({ source: null, reason });
   const info = page?.videoinfo?.[0] ?? page?.imageinfo?.[0];
-  if (!info || info.mediatype !== "VIDEO") return null;
+  if (!info || info.mediatype !== "VIDEO") return skip(null);
   const duration = Number(info.duration) || null;
-  if (duration !== null && (duration < MIN_DURATION || duration > MAX_DURATION)) return null;
+  if (duration !== null && (duration < MIN_DURATION || duration > MAX_DURATION)) return skip(REASON.length);
   const meta = info.extmetadata ?? {};
   const license = resolveLicense(plainText(meta.LicenseShortName?.value, 80), plainText(meta.LicenseUrl?.value, 200) || null, mode);
-  if (!license) return null;
+  if (!license) return skip(REASON.license);
   const author = plainText(meta.Artist?.value || meta.Credit?.value, 120);
   // 저작자 표시가 필요한 라이선스인데 작성자를 알 수 없으면 재사용 모드에서는 제외합니다.
-  if (!author && license.label.startsWith("CC BY") && mode === "reusable") return null;
+  if (!author && license.label.startsWith("CC BY") && mode === "reusable") return skip(REASON.author);
   const media = pickCommonsMedia(info, canPlay);
-  if (!media) return null;
+  if (!media) return skip(hasPlayableCommonsMedia(info, canPlay) ? REASON.size : REASON.format);
   const title = plainText(page.title, 200).replace(/^File:/, "");
-  return {
+  return { reason: null, source: {
     id: `commons:${page.pageid ?? title}`,
     provider: "Wikimedia Commons",
     title: title.replace(/\.(webm|ogv|ogg|mp4|mpg|mpeg|mov)$/i, "").replace(/_/g, " "),
@@ -181,7 +208,13 @@ export function parseCommonsPage(page: any, relevance: number, mode: LicenseMode
     bytes: media.bytes,
     tags: plainText(`${meta.Categories?.value ?? ""} ${meta.ObjectName?.value ?? ""}`, 600),
     relevance,
-  };
+  } };
+}
+
+function hasPlayableCommonsMedia(info: any, canPlay: CanPlay) {
+  const derivatives: CommonsDerivative[] = Array.isArray(info?.derivatives) ? info.derivatives : [];
+  const mime = typeof info?.mime === "string" ? info.mime : "";
+  return derivatives.some(d => d?.type && canPlay(d.type)) || (mime !== "" && canPlay(mime));
 }
 
 const COMMONS_PROPS = {
@@ -216,14 +249,21 @@ export function buildCommonsQueries(topic: TopicInfo, hints: string[]): string[]
 export async function searchCommons(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const found = new Map<string, SourceVideo>();
   const seen = new Set<string>();
+  const rejectedPages = new Set<unknown>();
   const errors: unknown[] = [];
   const add = (pages: any[], base: number, trusted = false) => {
     for (const page of pages) {
       const info = page?.videoinfo?.[0] ?? page?.imageinfo?.[0];
       if (info?.mediatype === "VIDEO") seen.add(String(page.pageid ?? page.title));
       const rank = Number(page?.index) || 1;
-      const source = parseCommonsPage(page, base - rank * 0.01, mode);
-      if (!source) continue;
+      const { source, reason } = inspectCommonsPage(page, base - rank * 0.01, mode);
+      if (!source) {
+        if (reason && !rejectedPages.has(page.pageid)) {
+          rejectedPages.add(page.pageid);
+          reject(stats, reason);
+        }
+        continue;
+      }
       const existing = found.get(source.id);
       if (!existing) found.set(source.id, { ...source, trusted });
       else if (trusted) existing.trusted = true;
@@ -257,13 +297,31 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
 // ---------------------------------------------------------------------------
 // Internet Archive
 
-export function pickArchiveFile(files: any[]): { name: string; bytes: number | null; duration: number | null } | null {
-  const candidates = (Array.isArray(files) ? files : [])
-    .filter(f => typeof f?.name === "string" && /\.mp4$/i.test(f.name))
-    .map(f => ({ name: String(f.name), bytes: Number(f.size) || null, duration: parseLength(f.length) }))
-    .filter(f => (f.bytes === null || f.bytes <= MAX_SOURCE_BYTES) && (f.duration === null || (f.duration >= MIN_DURATION && f.duration <= MAX_DURATION)));
-  candidates.sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity));
-  return candidates[0] ?? null;
+const ARCHIVE_VIDEO: Record<string, string> = { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", ogv: "video/ogg" };
+
+export function pickArchiveFile(files: any[], canPlay: CanPlay = defaultCanPlay): { name: string; bytes: number | null; duration: number | null } | null {
+  return inspectArchiveFiles(files, canPlay).file;
+}
+
+/**
+ * Internet Archive 항목에서 이 기기가 재생할 수 있는 가장 작은 영상 파일을 고릅니다(mp4·m4v·webm·ogv).
+ * 길이는 파일 크기 제한이 대신 막아 주므로 원본 영상보다 넉넉하게(90분) 봅니다. 못 쓰면 이유를 돌려줍니다.
+ */
+export function inspectArchiveFiles(files: any[], canPlay: CanPlay = defaultCanPlay): { file: { name: string; bytes: number | null; duration: number | null } | null; reason: string | null } {
+  const extension = (name: string) => name.split(".").pop()?.toLowerCase() ?? "";
+  const videos = (Array.isArray(files) ? files : [])
+    .filter(f => typeof f?.name === "string" && ARCHIVE_VIDEO[extension(f.name)])
+    .map(f => ({ name: String(f.name), mime: ARCHIVE_VIDEO[extension(f.name)], bytes: Number(f.size) || null, duration: parseLength(f.length) }));
+  if (!videos.length) return { file: null, reason: REASON.noVideo };
+  const playable = videos.filter(f => canPlay(f.mime));
+  if (!playable.length) return { file: null, reason: REASON.format };
+  const fitting = playable.filter(f => f.duration === null || (f.duration >= MIN_DURATION && f.duration <= MAX_ARCHIVE_DURATION));
+  if (!fitting.length) return { file: null, reason: REASON.length };
+  const small = fitting.filter(f => f.bytes === null || f.bytes <= MAX_SOURCE_BYTES);
+  if (!small.length) return { file: null, reason: REASON.size };
+  small.sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity));
+  const { name, bytes, duration } = small[0];
+  return { file: { name, bytes, duration }, reason: null };
 }
 
 function parseLength(value: unknown): number | null {
@@ -286,7 +344,7 @@ export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: Licen
 }
 
 export async function searchArchive(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
-  const main = archiveQuery(buildArchiveQuery(topic, hints, mode), mode === "any" ? 10 : 6, 1.5, mode, signal, stats);
+  const main = archiveQuery(buildArchiveQuery(topic, hints, mode), mode === "any" ? 20 : 10, 1.5, mode, signal, stats);
   // 관련 주제 검색은 보충용이라 실패해도 무시합니다.
   const related = topic.related?.length ? archiveQuery(buildArchiveQuery(topic, hints, mode, true), 4, 0.7, mode, signal, stats).catch(() => []) : Promise.resolve([]);
   const [a, b] = await Promise.all([main, related]);
@@ -295,7 +353,8 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
 
 async function archiveQuery(q: string, limit: number, base: number, mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const url = new URL("https://archive.org/advancedsearch.php");
-  url.search = new URLSearchParams({ q, rows: String(limit), output: "json", sort: "downloads desc" }).toString();
+  // 다운로드 순으로 정렬하면 긴 영화가 먼저 나오므로 검색 관련도 순(기본)으로 받습니다.
+  url.search = new URLSearchParams({ q, rows: String(limit), output: "json" }).toString();
   for (const field of ["identifier", "title", "creator", "licenseurl", "subject"]) url.searchParams.append("fl[]", field);
   const data = await getJson(url.toString(), signal);
   const docs: any[] = data?.response?.docs ?? [];
@@ -305,9 +364,19 @@ async function archiveQuery(q: string, limit: number, base: number, mode: Licens
       const license = resolveLicense("", typeof doc.licenseurl === "string" ? doc.licenseurl : null, mode);
       if (!license || typeof doc.identifier !== "string") return null;
       const meta = await getJson(`https://archive.org/metadata/${encodeURIComponent(doc.identifier)}`, signal).catch(() => null);
-      if (meta?.is_dark || meta?.metadata?.["access-restricted-item"] === "true") return null;
-      const file = pickArchiveFile(meta?.files ?? []);
-      if (!file) return null;
+      if (!meta) {
+        reject(stats, REASON.metadata);
+        return null;
+      }
+      if (meta.is_dark || meta.metadata?.["access-restricted-item"] === "true") {
+        reject(stats, REASON.restricted);
+        return null;
+      }
+      const { file, reason } = inspectArchiveFiles(meta.files ?? []);
+      if (!file) {
+        reject(stats, reason ?? REASON.noVideo);
+        return null;
+      }
       const creator = Array.isArray(doc.creator) ? doc.creator.join(", ") : doc.creator;
       return {
         id: `archive:${doc.identifier}`,
@@ -346,11 +415,11 @@ export async function findSources(
     const stats: SearchStats = { scanned: 0 };
     try {
       const sources = await search(stats);
-      reports.push({ provider, usable: sources.length, scanned: Math.max(stats.scanned, sources.length) });
+      reports.push({ provider, usable: sources.length, scanned: Math.max(stats.scanned, sources.length), rejected: stats.rejected });
       return sources;
     } catch (error) {
       if (signal?.aborted) throw error;
-      reports.push({ provider, usable: 0, scanned: stats.scanned, error: describeError(error) });
+      reports.push({ provider, usable: 0, scanned: stats.scanned, error: describeError(error), rejected: stats.rejected });
       return [];
     }
   };
@@ -378,7 +447,14 @@ export function summarizeReports(reports: SearchReport[]): string {
     .map(r => {
       if (r.error) return `${r.provider}: 실패 — ${r.error}`;
       if (r.usable) return `${r.provider}: ${r.usable}개`;
-      if (r.scanned) return `${r.provider}: ${r.scanned}개 찾았지만 쓸 수 있는 영상 없음(길이·형식·라이선스 조건)`;
+      if (r.scanned) {
+        const reasons = Object.entries(r.rejected ?? {})
+          .sort((a, b) => b[1] - a[1])
+          .slice(0, 3)
+          .map(([reason, count]) => `${reason} ${count}개`)
+          .join(", ");
+        return `${r.provider}: ${r.scanned}개 찾았지만 쓸 수 있는 영상 없음${reasons ? ` — ${reasons}` : ""}`;
+      }
       return `${r.provider}: 검색 결과 없음`;
     })
     .join("\n");
