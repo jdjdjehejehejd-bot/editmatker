@@ -434,7 +434,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   if (!loaded.length) {
     const more = failures.length > 6 ? `\n…외 ${failures.length - 6}개` : "";
-    throw new Error(`찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요.\n\n${failures.slice(0, 6).join("\n")}${more}`);
+    // 올린 영상만 썼으면 검색 이야기가 아니라 올린 파일의 문제를 알려 줍니다.
+    const lead = online.length
+      ? "찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요."
+      : "올린 영상을 쓰지 못했어요. 이 브라우저에서 재생되는 영상(mp4·webm, 2초 이상)인지 확인해 주세요. 휴대폰 고화질(HEVC) 영상은 열리지 않을 수 있어요 — 카메라 설정에서 '호환성 우선'으로 찍거나 다른 영상으로 시도해 보세요.";
+    throw new Error(`${lead}\n\n${failures.slice(0, 6).join("\n")}${more}`);
   }
 
   // 편집에서 각 주제가 비중만큼 나오도록, 주제 비중을 그 주제의 영상 수로 나눠 영상마다 나눠 줍니다.

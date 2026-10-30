@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { FRAMING_LABEL, type Framing } from "./lib/framing";
 import { DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
 import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
@@ -67,6 +68,7 @@ export default function App() {
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadsOnly, setUploadsOnly] = useState(false);
   const [overlay, setOverlay] = useState<OverlaySettings>(DEFAULT_OVERLAY);
+  const [framing, setFraming] = useState<Framing>("auto");
   const patchOverlay = (patch: Partial<OverlaySettings>) => setOverlay(current => ({ ...current, ...patch }));
   const patchText = (index: number, patch: Partial<TextOverlay>) => setOverlay(current => ({ ...current, texts: current.texts.map((t, i) => (i === index ? { ...t, ...patch } : t)) }));
   const canStart = Boolean(topic.trim() || uploadFiles.length);
@@ -139,7 +141,7 @@ export default function App() {
   const blockedInput = useMemo(() => checkUserInput([topic, overlayText].join("\n"), features), [topic, overlayText, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides, overlay };
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides, overlay, framing };
   // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
   const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle } : run!;
   const [width, height] = ASPECT_SIZE[shown.aspect];
@@ -171,6 +173,7 @@ export default function App() {
     setMusicStyle(preset.musicStyle ?? "auto");
     setOverrides(preset.style ?? {});
     setOverlay(preset.overlay ?? DEFAULT_OVERLAY);
+    setFraming(preset.framing ?? "auto");
   };
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
@@ -242,6 +245,7 @@ export default function App() {
         showTitle: overlay.showTitle,
         showCredits: overlay.showCredits,
         texts: overlay.texts,
+        framing,
         music: pipeline.music,
         audio,
         signal: controller.signal,
@@ -590,6 +594,12 @@ export default function App() {
               <div className="field">
                 <span>화면 비율</span>
                 <Segmented options={["9:16", "16:9", "1:1"] as Aspect[]} value={aspect} onChange={setAspect} />
+                <div className="framing">
+                  <Segmented options={["auto", "fill", "fit"] as Framing[]} value={framing} onChange={setFraming} format={mode => FRAMING_LABEL[mode]} />
+                  <small className="hint">
+                    {framing === "auto" ? "많이 잘리는 영상은 덜 자르고 빈 곳은 흐린 배경으로 채워요" : framing === "fill" ? "화면을 꽉 채우고 넘치는 부분은 잘라요(주인공을 따라감)" : "원본을 자르지 않고 다 보여 줘요"}
+                  </small>
+                </div>
               </div>
             </div>
 

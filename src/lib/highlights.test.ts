@@ -53,3 +53,20 @@ describe("인물 주제", () => {
     expect(person[6]).toBeGreaterThan(person[5]);
   });
 });
+
+describe("의미 없는 장면 거르기", () => {
+  it("멈춘 화면·빈 화면 구간은 고르지 않고, 크게 떨어지는 구간으로 채우지 않음", async () => {
+    const { pickHighlights, scoreSamples } = await import("./highlights");
+    const { parseStyle } = await import("./style");
+    // 0~20초: 움직이는 장면, 20~40초: 멈춘 자막 화면, 40~60초: 단색 화면
+    const samples = Array.from({ length: 120 }, (_, i) => {
+      const t = i * 0.5;
+      const live = t < 20;
+      return { t, motion: live ? 0.05 + 0.03 * Math.sin(i) : 0.001, audio: live ? 0.5 : 0.1, color: live ? 0.4 : 0.3, brightness: 0.5, cut: false, detail: t >= 40 ? 0.002 : 0.05 };
+    });
+    const scores = scoreSamples(samples, parseStyle("").weights);
+    const picks = pickHighlights("a", samples, scores, 2, 10, 60);
+    expect(picks.length).toBeGreaterThan(0);
+    expect(picks.every(p => p.start < 20)).toBe(true);
+  });
+});

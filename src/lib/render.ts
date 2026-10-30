@@ -1,7 +1,7 @@
 // 편집 계획을 캔버스에 실시간으로 그리고 MediaRecorder로 영상 파일을 만듭니다.
 
 import { createHiddenVideo, disposeVideo, seek } from "./analyze";
-import { cropOffset, focusAt, smoothTrack, type FocusPoint } from "./framing";
+import { cropOffset, focusAt, frameScale, smoothTrack, type ContentBox, type FocusPoint, type Framing } from "./framing";
 import type { FrameSample } from "./highlights";
 import { renderableTexts, TEXT_SIZE_RATIO, textAlpha, textAnchorY, type TextOverlay } from "./overlay";
 import type { EditPlan, Segment } from "./plan";
@@ -55,8 +55,8 @@ const GRADE_TINT: Record<Grade, [GlobalCompositeOperation, string][]> = {
 export interface RenderSource {
   id: string;
   url: string;
-  /** 분석 결과가 있으면 관심 지점(사람·움직임)을 따라 화면을 맞춥니다 */
-  analysis?: { samples: FrameSample[] };
+  /** 분석 결과가 있으면 관심 지점(사람·움직임)을 따라 화면을 맞추고, 원본의 검은 띠는 잘라 냅니다 */
+  analysis?: { samples: FrameSample[]; content?: ContentBox };
 }
 
 export interface RenderOptions {
@@ -73,6 +73,8 @@ export interface RenderOptions {
   showCredits?: boolean;
   /** 사용자가 넣은 텍스트 */
   texts?: TextOverlay[];
+  /** 화면 맞추기 (기본 자동) */
+  framing?: Framing;
   music: { buffer: AudioBuffer; offset: number };
   /** 미리 깨워 둔 AudioContext (iOS는 버튼을 누를 때 만든 것만 소리가 남) */
   audio?: AudioContext;
@@ -135,6 +137,13 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   vignette.addColorStop(0, "rgba(0,0,0,0)");
   vignette.addColorStop(1, "rgba(0,0,0,0.55)");
   const urls = new Map(options.sources.map(s => [s.id, s.url]));
+  const contents = new Map(options.sources.map(s => [s.id, s.analysis?.content]));
+  const framing = options.framing ?? "auto";
+  // 다 채우지 않는 화면(전체 보이기·자동)의 남는 곳에 깔 흐린 배경: 아주 작게 그렸다가 크게 늘리면 싸게 흐려집니다.
+  const backdrop = document.createElement("canvas");
+  backdrop.width = Math.max(8, Math.round(W / 16));
+  backdrop.height = Math.max(8, Math.round(H / 16));
+  const backdropCtx = backdrop.getContext("2d")!;
   // 자동 리프레이밍: 영상마다 관심 지점 경로를 부드럽게 만들어 둡니다(장면 전환을 넘어서 섞이지 않게 컷마다 따로).
   const tracks = new Map<string, FocusPoint[]>(
     options.sources.map(source => {
@@ -248,26 +257,44 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       dx = (Math.random() - 0.5) * amp;
       dy = (Math.random() - 0.5) * amp;
     }
-    const vw = video.videoWidth || W;
-    const vh = video.videoHeight || H;
-    const scale = Math.max(W / vw, H / vh) * zoom;
+    const fullW = video.videoWidth || W;
+    const fullH = video.videoHeight || H;
+    // 원본의 검은 띠(레터박스)는 빼고 실제 화면만 씁니다.
+    const box = contents.get(seg.sourceId) ?? { x: 0, y: 0, w: 1, h: 1 };
+    const sx = box.x * fullW;
+    const sy = box.y * fullH;
+    const vw = Math.max(1, box.w * fullW);
+    const vh = Math.max(1, box.h * fullH);
+    const base = frameScale(vw, vh, W, H, framing);
+    const scale = base * zoom;
     const w = vw * scale;
     const h = vh * scale;
     ctx.save();
     if (supportsFilter) ctx.filter = GRADE_FILTER[style.grade];
     ctx.globalAlpha = alpha;
     if (video.readyState >= 2) {
-      // 가운데가 아니라 관심 지점(사람·움직임)이 화면 가운데에 오도록 자릅니다.
+      // 화면을 다 채우지 못하면 같은 장면을 흐리고 어둡게 깔아 빈 곳을 메웁니다.
+      if (vw * base < W - 1 || vh * base < H - 1) {
+        const cover = Math.max(backdrop.width / vw, backdrop.height / vh);
+        backdropCtx.drawImage(video, sx, sy, vw, vh, (backdrop.width - vw * cover) / 2, (backdrop.height - vh * cover) / 2, vw * cover, vh * cover);
+        ctx.imageSmoothingQuality = "high";
+        ctx.drawImage(backdrop, 0, 0, W, H);
+        ctx.fillStyle = "rgba(0,0,0,0.35)";
+        ctx.fillRect(0, 0, W, H);
+      }
+      // 가운데가 아니라 관심 지점(사람·움직임)이 화면 가운데에 오도록 자릅니다(관심 지점은 원본 전체 기준이라 실제 화면 기준으로 바꿈).
       const focus = focusAt(tracks.get(seg.sourceId) ?? [], video.currentTime);
-      const x = cropOffset(focus.x, w, W) + dx;
-      const y = cropOffset(focus.y, h, H) + dy;
-      ctx.drawImage(video, x, y, w, h);
+      const fx = Math.min(1, Math.max(0, (focus.x - box.x) / box.w));
+      const fy = Math.min(1, Math.max(0, (focus.y - box.y) / box.h));
+      const x = cropOffset(fx, w, W) + dx;
+      const y = cropOffset(fy, h, H) + dy;
+      ctx.drawImage(video, sx, sy, vw, vh, x, y, w, h);
       // 휩: 컷 직후 가로로 번지는 잔상(모션 블러)
       if (seg.transition === "whip" && local < WHIP_SECONDS) {
         const strength = 1 - local / WHIP_SECONDS;
         const dir = Math.round(seg.start * 10) % 2 ? 1 : -1;
         ctx.globalAlpha = 0.22 * strength;
-        for (let k = 1; k <= 4; k++) ctx.drawImage(video, x + dir * k * 22 * strength, y, w, h);
+        for (let k = 1; k <= 4; k++) ctx.drawImage(video, sx, sy, vw, vh, x + dir * k * 22 * strength, y, w, h);
       }
     }
     ctx.restore();

@@ -3,6 +3,7 @@
 
 import type { Aspect } from "./render";
 import type { LicenseMode } from "./sources";
+import { FRAMING_LABEL, type Framing } from "./framing";
 import { sanitizeOverlay, type OverlaySettings } from "./overlay";
 import { sanitizeOverrides, type MusicStyle, type StyleOverrides } from "./style";
 
@@ -21,6 +22,8 @@ export interface Preset {
   style?: StyleOverrides;
   /** 제목·출처·텍스트 */
   overlay?: OverlaySettings;
+  /** 화면 맞추기 */
+  framing?: Framing;
   /** 기본 제공 프리셋은 지울 수 없습니다 */
   builtin?: boolean;
 }
@@ -59,6 +62,7 @@ export function sanitizePreset(value: any): Preset | null {
     musicStyle: MUSIC_STYLES.includes(value.musicStyle) ? value.musicStyle : "auto",
     style: sanitizeOverrides(value.style),
     overlay: sanitizeOverlay(value.overlay),
+    framing: Object.prototype.hasOwnProperty.call(FRAMING_LABEL, value.framing) ? value.framing : "auto",
   };
 }
 
@@ -100,7 +104,8 @@ export function matchesPreset(preset: Preset, settings: PresetSettings) {
     preset.licenseMode === settings.licenseMode &&
     (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto") &&
     JSON.stringify(sanitizeOverrides(preset.style)) === JSON.stringify(sanitizeOverrides(settings.style)) &&
-    JSON.stringify(sanitizeOverlay(preset.overlay)) === JSON.stringify(sanitizeOverlay(settings.overlay))
+    JSON.stringify(sanitizeOverlay(preset.overlay)) === JSON.stringify(sanitizeOverlay(settings.overlay)) &&
+    (preset.framing ?? "auto") === (settings.framing ?? "auto")
   );
 }
 

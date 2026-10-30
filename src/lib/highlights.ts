@@ -19,7 +19,16 @@ export interface FrameSample {
   focusY?: number;
   /** 사람이 화면을 차지하는 비율 0~1 */
   presence?: number;
+  /** 화면의 세부(이웃 픽셀 밝기 차 평균) — 단색·뿌연 화면은 0에 가까움 */
+  detail?: number;
 }
+
+/** 이보다 움직임이 적은 샘플은 멈춘 화면(정지 화면·자막 카드·슬라이드)으로 봅니다 */
+export const STATIC_MOTION = 0.004;
+/** 이보다 세부가 적으면 빈 화면(단색·심하게 흐림) */
+export const FLAT_DETAIL = 0.008;
+/** 같은 영상에서 가장 좋은 구간 점수의 이 비율보다 낮은 구간은 쓰지 않습니다(장면이 모자라면 좋은 장면을 다시 씀) */
+export const MIN_RELATIVE_SCORE = 0.45;
 
 export interface Highlight {
   sourceId: string;
@@ -71,6 +80,8 @@ export function scoreSamples(samples: FrameSample[], weights: EditStyle["weights
     // 검은 화면, 하얗게 날아간 화면, 정지된 자막 화면은 피합니다.
     if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
     if (s.color < 0.02) score *= 0.5;
+    // 단색·뿌연 화면 (세부를 재지 않은 예전 분석 결과는 건너뜀)
+    if (s.detail !== undefined && s.detail < FLAT_DETAIL) score *= 0.3;
     return score;
   });
 }
@@ -97,19 +108,26 @@ export function pickHighlights(
     let sum = 0;
     let n = 0;
     let cutPenalty = 0;
+    let still = 0;
     for (let j = i; j < samples.length && samples[j].t < end; j++) {
       sum += scores[j];
       n++;
       if (j > i && samples[j].cut) cutPenalty += 0.35;
+      if (j > i && !samples[j].cut && samples[j].motion < STATIC_MOTION) still++;
     }
     // 장면 전환 직후에서 시작하면 컷이 깔끔합니다.
     const cleanStart = samples[i].cut || samples[i + 1]?.cut ? 0.05 : 0;
-    if (n) windows.push({ sourceId, start, length, score: Math.max(0, sum / n - cutPenalty + cleanStart) });
+    // 거의 내내 멈춘 화면(정지 화면·자막 카드)은 에딧에 의미가 없으므로 크게 낮춥니다.
+    const frozen = n > 2 && still / (n - 1) > 0.8 ? 0.35 : 1;
+    if (n) windows.push({ sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart) * frozen) });
   }
   windows.sort((a, b) => b.score - a.score);
+  // 의미 없는 구간을 채워 넣지 않도록, 가장 좋은 구간보다 많이 떨어지는 구간은 고르지 않습니다.
+  const floor = (windows[0]?.score ?? 0) * MIN_RELATIVE_SCORE;
   const chosen: Highlight[] = [];
   const gap = Math.max(length * 0.75, 1);
   for (const w of windows) {
+    if (chosen.length && w.score < floor) break;
     if (chosen.every(c => Math.abs(c.start - w.start) >= length + gap * 0.25)) chosen.push(w);
     if (chosen.length >= count) break;
   }
