@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
-import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
+import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
@@ -63,6 +63,10 @@ export default function App() {
   const [musicStyle, setMusicStyle] = useState<MusicStyle>("auto");
   const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
+  const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  // 지운 뒤 같은 파일을 다시 고를 수 있게 파일 입력을 새로 만듭니다.
+  const [uploadKey, setUploadKey] = useState(0);
+  const canStart = Boolean(topic.trim() || uploadFiles.length);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [stockKeys, setStockKeys] = useState<StockKeys>(() => loadStockKeys());
   const updateStockKey = (provider: keyof StockKeys, value: string) =>
@@ -192,7 +196,7 @@ export default function App() {
   };
 
   const start = async () => {
-    if (!topic.trim() || status === "running" || blockedInput) return;
+    if (!canStart || status === "running" || blockedInput) return;
     reset();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -206,7 +210,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -365,6 +369,25 @@ export default function App() {
                 쉼표로 여러 주제를 섞을 수 있어요 · <code>3:케인:</code>은 3배 비중
               </small>
             </label>
+            <div className="field">
+              <span>내 영상으로 편집</span>
+              <label className="file upload">
+                <input key={uploadKey} type="file" accept="video/*" multiple onChange={e => setUploadFiles([...(e.target.files ?? [])].slice(0, MAX_UPLOADS))} />
+                <small>
+                  {uploadFiles.length
+                    ? `${uploadFiles.length}개 · ${uploadFiles.map(f => f.name).join(", ")}`
+                    : `편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 올린 영상만, 주제도 쓰면 찾은 영상과 섞어요`}
+                </small>
+              </label>
+              {uploadFiles.length > 0 && (
+                <button type="button" className="chip" onClick={() => {
+                    setUploadFiles([]);
+                    setUploadKey(key => key + 1);
+                  }}>
+                  올린 영상 지우기
+                </button>
+              )}
+            </div>
             {topicSpecs.length > 1 || topicSpecs.some(spec => spec.weight !== 1) ? (
               <div className="topic-chips" aria-label="주제 비중">
                 {topicSpecs.map(spec => (
@@ -572,7 +595,7 @@ export default function App() {
                 중단하기
               </button>
             ) : (
-              <button className="primary" type="button" onClick={start} disabled={!topic.trim() || Boolean(blockedInput)}>
+              <button className="primary" type="button" onClick={start} disabled={!canStart || Boolean(blockedInput)}>
                 {blockedInput ? "생성 불가" : status === "done" ? "다시 만들기" : "에딧 만들기"}
               </button>
             )}
@@ -702,7 +725,7 @@ export default function App() {
             </div>
             <div className="grid">
               {loaded.map(source => (
-                <a key={source.id} className="tile" href={source.pageUrl} target="_blank" rel="noreferrer" title={source.title}>
+                <a key={source.id} className="tile" href={source.pageUrl || undefined} target="_blank" rel="noreferrer" title={source.title}>
                   {source.poster ? <img src={source.poster} alt="" loading="lazy" onError={e => (e.currentTarget.style.visibility = "hidden")} /> : <span className="poster" />}
                   <span className="tile-badge">{source.provider}</span>
                   <span className="tile-info">
