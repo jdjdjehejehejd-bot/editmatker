@@ -8,7 +8,7 @@ import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, parseTopicInput } from "./topic";
-import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
+import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
 import { searchReferenceEdits } from "./social";
@@ -143,8 +143,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     const details = topics.map(t => (topics.length > 1 ? `[${t.info.label}]\n` : "") + summarizeReports(t.reports)).join("\n\n");
     const censorNote = censored.length ? `\n\n검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외` : "";
     const relevanceNote = irrelevant ? `\n관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외` : "";
+    // Commons 영상은 WebM뿐이라 아이폰 사파리 등에서는 재생할 수 없습니다 — 해결 방법을 함께 알려 줍니다.
+    const formatBlocked = topics.some(t => t.reports.some(r => (r.rejected?.[REASON.format] ?? 0) > 0));
+    const formatNote = formatBlocked ? "\n\n도움말: 이 브라우저는 WebM 영상을 재생하지 못해요(아이폰 사파리 등). PC나 안드로이드의 Chrome에서 열면 Commons 영상을 쓸 수 있어요." : "";
     const names = topics.map(t => `"${t.info.label}"`).join(", ");
-    throw new Error(`${scope}${names}이(가) 나오는 영상을 찾지 못했어요. 이름을 정확히(또는 영어로) 입력해 보세요.\n\n${details}${censorNote}${relevanceNote}`);
+    throw new Error(`${scope}${names} 영상을 찾지 못했어요. 제목에 이름이 나오는 영상만 쓰니, 이름을 정확히(또는 영어로) 입력해 보세요.\n\n${details}${censorNote}${relevanceNote}${formatNote}`);
   }
   const failures: string[] = topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`);
   if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
