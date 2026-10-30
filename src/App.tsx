@@ -1,4 +1,5 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
+import { DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
 import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
@@ -65,6 +66,9 @@ export default function App() {
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
   const [uploadsOnly, setUploadsOnly] = useState(false);
+  const [overlay, setOverlay] = useState<OverlaySettings>(DEFAULT_OVERLAY);
+  const patchOverlay = (patch: Partial<OverlaySettings>) => setOverlay(current => ({ ...current, ...patch }));
+  const patchText = (index: number, patch: Partial<TextOverlay>) => setOverlay(current => ({ ...current, texts: current.texts.map((t, i) => (i === index ? { ...t, ...patch } : t)) }));
   const canStart = Boolean(topic.trim() || uploadFiles.length);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [stockKeys, setStockKeys] = useState<StockKeys>(() => loadStockKeys());
@@ -113,7 +117,9 @@ export default function App() {
   const abortRef = useRef<AbortController | null>(null);
   // 특징 문장에서 자동으로 읽은 스타일 + 직접 설정한 항목
   const autoStyle = useMemo(() => parseStyle(features), [features]);
-  const preview = useMemo(() => applyOverrides(parseStyle(features, { mood: overrides.mood }), overrides), [features, overrides]);
+  // 고른 분위기로 읽은 자동 값 (자동 칸의 안내에 씀) — 분위기를 안 골랐으면 autoStyle과 같으므로 다시 계산하지 않습니다.
+  const moodStyle = useMemo(() => (overrides.mood ? parseStyle(features, { mood: overrides.mood }) : autoStyle), [features, overrides.mood, autoStyle]);
+  const preview = useMemo(() => applyOverrides(moodStyle, overrides), [moodStyle, overrides]);
   const hasOverrides = Object.keys(overrides).length > 0;
   const setOverride = <K extends keyof StyleOverrides>(key: K, value: StyleOverrides[K] | undefined) =>
     setOverrides(current => {
@@ -128,10 +134,12 @@ export default function App() {
       return { ...current, effects };
     });
   const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
-  const blockedInput = useMemo(() => checkUserInput(topic, features), [topic, features]);
+  // 검열: 직접 쓴 제목·텍스트도 주제와 같은 기준으로 봅니다.
+  const overlayText = [overlay.title, ...overlay.texts.map(t => t.text)].join("\n");
+  const blockedInput = useMemo(() => checkUserInput([topic, overlayText].join("\n"), features), [topic, overlayText, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides };
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides, overlay };
   // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
   const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle } : run!;
   const [width, height] = ASPECT_SIZE[shown.aspect];
@@ -162,6 +170,7 @@ export default function App() {
     setLicenseMode(preset.licenseMode);
     setMusicStyle(preset.musicStyle ?? "auto");
     setOverrides(preset.style ?? {});
+    setOverlay(preset.overlay ?? DEFAULT_OVERLAY);
   };
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
@@ -210,7 +219,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadsOnly, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -230,13 +239,16 @@ export default function App() {
         title: pipeline.title,
         subtitle: pipeline.style.label,
         credits: pipeline.credits,
+        showTitle: overlay.showTitle,
+        showCredits: overlay.showCredits,
+        texts: overlay.texts,
         music: pipeline.music,
         audio,
         signal: controller.signal,
         onProgress: ratio => setStep({ id: "render", detail: "실시간으로 렌더링하는 중 — 탭을 닫거나 숨기지 마세요", ratio }),
       });
       const ext = rendered.mimeType.includes("mp4") ? "mp4" : "webm";
-      const file = new File([rendered.blob], `${slug(topic)}-edit.${ext}`, { type: rendered.blob.type });
+      const file = new File([rendered.blob], `${slug(pipeline.title)}-edit.${ext}`, { type: rendered.blob.type });
       setOutput({ url: URL.createObjectURL(rendered.blob), ext, file });
       setStatus("done");
     } catch (e) {
@@ -292,7 +304,7 @@ export default function App() {
   const stepIndex = step ? STEPS.findIndex(s => s.id === step.id) : -1;
   const colorOf = (id: string) => SOURCE_COLORS[Math.max(0, loaded.findIndex(s => s.id === id)) % SOURCE_COLORS.length];
   const isBlockedError = Boolean(error?.startsWith("생성 불가"));
-  const reelTitle = result?.title ?? (shown.specs.map(spec => spec.term).join(" × ") || "editmatker");
+  const reelTitle = result?.title ?? (overlay.title.trim() || shown.specs.map(spec => spec.term).join(" × ") || "editmatker");
   // 다 만들었으면 실제로 쓴 스타일(참고 에딧에서 배운 값 포함), 아니면 만들기를 누른 순간의 스타일
   const captionStyle = result?.style ?? shown.style;
   const hashtags = [captionStyle.label.split("·")[0], GRADE_LABEL[captionStyle.grade], ...[...captionStyle.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
@@ -437,7 +449,7 @@ export default function App() {
                     min={60}
                     max={180}
                     disabled={Boolean(musicFile)}
-                    placeholder={musicFile ? "내 음악 템포" : `자동 (${parseStyle(features, { mood: overrides.mood }).bpm})`}
+                    placeholder={musicFile ? "내 음악 템포" : `자동 (${moodStyle.bpm})`}
                     value={overrides.bpm ?? ""}
                     onChange={e => setOverride("bpm", e.target.value ? Number(e.target.value) : undefined)}
                   />
@@ -445,7 +457,7 @@ export default function App() {
                 <label>
                   <span>색감</span>
                   <select className="select" value={overrides.grade ?? ""} onChange={e => setOverride("grade", (e.target.value || undefined) as Grade | undefined)}>
-                    <option value="">자동 ({GRADE_LABEL[parseStyle(features, { mood: overrides.mood }).grade]})</option>
+                    <option value="">자동 ({GRADE_LABEL[moodStyle.grade]})</option>
                     {(Object.keys(GRADE_LABEL) as Grade[]).map(grade => (
                       <option key={grade} value={grade}>
                         {GRADE_LABEL[grade]}
@@ -488,6 +500,85 @@ export default function App() {
                     {EFFECT_LABEL[effect]}
                   </button>
                 ))}
+              </div>
+            </details>
+
+            <details className="overlay-editor fold">
+              <summary>
+                <strong>제목 · 텍스트</strong>
+                <small>
+                  {overlay.showTitle ? `제목 ${overlay.title.trim() ? `"${overlay.title.trim()}"` : "자동"}` : "제목 없음"} · {overlay.showCredits ? "출처 넣음" : "출처 없음"}
+                  {overlay.texts.length ? ` · 텍스트 ${overlay.texts.length}개` : ""}
+                </small>
+              </summary>
+              <label className="toggle">
+                <input type="checkbox" checked={overlay.showTitle} onChange={e => patchOverlay({ showTitle: e.target.checked })} />
+                <span>시작 부분에 제목 넣기</span>
+              </label>
+              <input
+                className="select"
+                value={overlay.title}
+                onChange={e => patchOverlay({ title: e.target.value })}
+                disabled={!overlay.showTitle}
+                maxLength={MAX_TEXT_LENGTH}
+                placeholder={`제목 — 비우면 자동 (${topicSpecs.map(spec => spec.term).join(" × ") || "내 영상"})`}
+                aria-label="제목"
+              />
+              <label className="toggle">
+                <input type="checkbox" checked={overlay.showCredits} onChange={e => patchOverlay({ showCredits: e.target.checked })} />
+                <span>끝에 출처(크레딧) 넣기</span>
+              </label>
+              {!overlay.showCredits && licenseMode === "any" && <small className="hint">다른 사람의 영상을 쓰면 출처를 남기는 게 좋아요.</small>}
+              <div className="text-list">
+                {overlay.texts.map((text, i) => (
+                  <div key={i} className="text-item">
+                    <div className="text-line">
+                      <input className="select" value={text.text} maxLength={MAX_TEXT_LENGTH} placeholder="넣을 텍스트" onChange={e => patchText(i, { text: e.target.value })} aria-label={`텍스트 ${i + 1}`} />
+                      <button type="button" className="remove" aria-label={`텍스트 ${i + 1} 빼기`} onClick={() => patchOverlay({ texts: overlay.texts.filter((_, j) => j !== i) })}>
+                        ×
+                      </button>
+                    </div>
+                    <div className="text-options">
+                      <label>
+                        <span>시작</span>
+                        <input className="select" type="number" inputMode="decimal" min={0} max={seconds} step={0.5} value={text.start} onChange={e => patchText(i, { start: Math.max(0, Number(e.target.value) || 0) })} />
+                        <small>초</small>
+                      </label>
+                      <label>
+                        <span>길이</span>
+                        <input className="select" type="number" inputMode="decimal" min={0.5} max={seconds} step={0.5} value={text.duration} onChange={e => patchText(i, { duration: Math.max(0.3, Number(e.target.value) || 0.3) })} />
+                        <small>초</small>
+                      </label>
+                      <select className="select" value={text.position} onChange={e => patchText(i, { position: e.target.value as TextPosition })} aria-label="위치">
+                        {(Object.keys(TEXT_POSITION_LABEL) as TextPosition[]).map(position => (
+                          <option key={position} value={position}>
+                            {TEXT_POSITION_LABEL[position]}
+                          </option>
+                        ))}
+                      </select>
+                      <select className="select" value={text.size} onChange={e => patchText(i, { size: e.target.value as TextSize })} aria-label="크기">
+                        {(Object.keys(TEXT_SIZE_LABEL) as TextSize[]).map(size => (
+                          <option key={size} value={size}>
+                            {TEXT_SIZE_LABEL[size]}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    {text.start >= seconds && <small className="hint warn">영상 길이({seconds}초)보다 늦게 시작해서 보이지 않아요</small>}
+                  </div>
+                ))}
+                {overlay.texts.length < MAX_TEXTS && (
+                  <button
+                    type="button"
+                    className="pick-button"
+                    onClick={() => {
+                      const last = overlay.texts[overlay.texts.length - 1];
+                      patchOverlay({ texts: [...overlay.texts, newText(last ? Math.min(seconds - 1, last.start + last.duration) : 1)] });
+                    }}
+                  >
+                    <span aria-hidden="true">＋</span>텍스트 추가
+                  </button>
+                )}
               </div>
             </details>
 

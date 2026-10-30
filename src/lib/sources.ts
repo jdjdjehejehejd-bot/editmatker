@@ -419,6 +419,10 @@ async function archiveQuery(q: string, limit: number, base: number, mode: Licens
  * 모든 출처를 함께 검색하고 관련도 순으로 정렬합니다.
  * YouTube는 로컬 도우미(`helper`)가 있을 때만, YouTube·Reddit은 "모든 공개 영상" 모드에서만 씁니다.
  */
+/** 속도: "다시 만들기"처럼 같은 조건으로 곧바로 다시 검색하면 앞선 결과를 씁니다(오류 없이 끝난 검색만, 10분 동안). */
+const SEARCH_TTL = 10 * 60 * 1000;
+const searches = new Map<string, { at: number; sources: SourceVideo[]; reports: SearchReport[] }>();
+
 export async function findSources(
   topic: TopicInfo,
   hints: string[],
@@ -426,6 +430,23 @@ export async function findSources(
   helper: string | null,
   signal?: AbortSignal,
   stockKeys: StockKeys = { pexels: "", pixabay: "" }
+): Promise<{ sources: SourceVideo[]; reports: SearchReport[] }> {
+  const key = JSON.stringify([topic, hints, mode, helper, stockKeys]);
+  const cached = searches.get(key);
+  if (cached && Date.now() - cached.at < SEARCH_TTL) return { sources: [...cached.sources], reports: cached.reports.map(r => ({ ...r })) };
+  const result = await searchAllSources(topic, hints, mode, helper, signal, stockKeys);
+  // 키가 없어 못 쓴 출처(Pexels·Pixabay)는 다시 해도 같으므로 오류로 치지 않습니다.
+  if (result.reports.every(r => !r.error || r.error === "API 키 필요")) searches.set(key, { at: Date.now(), ...result });
+  return result;
+}
+
+async function searchAllSources(
+  topic: TopicInfo,
+  hints: string[],
+  mode: LicenseMode,
+  helper: string | null,
+  signal: AbortSignal | undefined,
+  stockKeys: StockKeys
 ): Promise<{ sources: SourceVideo[]; reports: SearchReport[] }> {
   const reports: SearchReport[] = [];
   const run = async (provider: Provider, search: (stats: SearchStats) => Promise<SourceVideo[]>) => {

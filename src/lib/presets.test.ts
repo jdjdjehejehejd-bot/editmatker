@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { loadPresets, matchesPreset, sanitizePreset, savePresets, upsertPreset, type PresetSettings } from "./presets";
+import { DEFAULT_OVERLAY } from "./overlay";
 
 const settings: PresetSettings = { topic: "손흥민, 3:케인:", features: "골 장면", seconds: 15, aspect: "9:16", sourceCount: 3, licenseMode: "any" };
 
@@ -13,7 +14,7 @@ describe("프리셋", () => {
     const storage = memoryStorage();
     const list = upsertPreset([], "토트넘 듀오", settings, 1);
     savePresets(list, storage);
-    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto", style: {} }]);
+    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto", style: {}, overlay: DEFAULT_OVERLAY }]);
   });
 
   it("같은 이름은 덮어쓰고, 새 이름은 맨 앞에 추가한다", () => {
