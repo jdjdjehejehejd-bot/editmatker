@@ -119,6 +119,10 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .learn { display: flex; flex-direction: column; gap: 8px; background: var(--soft); border-radius: 10px; padding: 10px 12px; }
 .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }
 .toggle input { width: 18px; height: 18px; accent-color: var(--blue); }
+.topic-summary { display: flex; flex-direction: column; gap: 3px; margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
+.topic-summary b { font-weight: 600; }
+.topic-summary.warn { background: #fff6e5; border-radius: 8px; padding: 8px 10px; }
+.topic-summary.warn span:has(+ span), .topic-summary.warn span { line-height: 1.5; }
 .learned { margin: 8px 0 0; font-size: 12px; color: var(--ink-2); }
 .learned b { margin-right: 4px; background: var(--ig); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .chip { background: #fff; border: 1px solid var(--line); border-radius: 8px; padding: 5px 11px; font-size: 12px; font-weight: 600; }
