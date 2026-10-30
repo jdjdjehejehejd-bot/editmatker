@@ -17,6 +17,14 @@ export interface TopicInfo {
   related?: string[];
   /** 스포츠 선수·경기 주제인지 (장면 검열에서 경기 중 노출을 오탐하지 않으려고) */
   sports?: boolean;
+  /** 사람(또는 그룹) 주제인지 — 그 사람이 크게 보이는 장면을 고르고 화면을 사람에게 맞추려고 */
+  person?: boolean;
+}
+
+/** 사람(P31=Q5), 직업(P106)이 있는 항목, 구성원(P527)이 있는 그룹은 인물 주제로 봅니다. */
+export function isPersonEntity(entity: any): boolean {
+  const instanceOf: string[] = (entity?.claims?.P31 ?? []).map((c: any) => c?.mainsnak?.datavalue?.value?.id).filter(Boolean);
+  return instanceOf.includes("Q5") || Boolean(entity?.claims?.P106?.length) || (Boolean(entity?.claims?.P527?.length) && /group|band|그룹|밴드|duo|팀/i.test(`${entity?.descriptions?.en?.value ?? ""} ${entity?.descriptions?.ko?.value ?? ""}`));
 }
 
 const SPORTS_WORDS = /athlete|player|footballer|fighter|boxer|wrestler|martial art|\bmma\b|ufc|swimmer|sprinter|cyclist|gymnast|bodybuilder|skater|tennis|golfer|olympi|선수|격투|복서|레슬러|수영|육상|체조|보디빌|축구|야구|농구|배구|테니스|골프|올림픽/i;
@@ -175,6 +183,7 @@ export async function resolveTopic(query: string, signal?: AbortSignal, options:
       commonsCategory: claimValues("P373")[0] ?? null,
       wikidataVideos: claimValues("P10"),
       sports: isSportsEntity(entity),
+      person: isPersonEntity(entity) || isSportsEntity(entity),
       // 별칭·관련 주제에 금지어가 섞여 있으면 검색어로 쓰지 않습니다.
       aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowedWith(options, alias)),
       related: related.filter(item => isTextAllowedWith(options, item)),

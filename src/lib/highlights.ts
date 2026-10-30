@@ -14,6 +14,11 @@ export interface FrameSample {
   brightness: number;
   /** 장면 전환 여부 */
   cut: boolean;
+  /** 관심 지점(움직임·사람) 위치 0~1 — 화면 비율에 맞춰 자를 때 따라갈 곳 */
+  focusX?: number;
+  focusY?: number;
+  /** 사람이 화면을 차지하는 비율 0~1 */
+  presence?: number;
 }
 
 export interface Highlight {
@@ -48,16 +53,21 @@ export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boole
 }
 
 /** 샘플마다 0~1 점수를 매깁니다. */
-export function scoreSamples(samples: FrameSample[], weights: EditStyle["weights"]): number[] {
+/**
+ * 샘플마다 0~1 점수를 매깁니다.
+ * @param presenceWeight 사람이 화면에 크게 나올수록 더할 가중치 (인물 주제에서 그 사람이 보이는 순간을 고르려고, 기본 0)
+ */
+export function scoreSamples(samples: FrameSample[], weights: EditStyle["weights"], presenceWeight = 0): number[] {
   if (!samples.length) return [];
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
   const motion = normalize(samples.map(s => (s.cut ? 0 : s.motion)));
   const audio = normalize(samples.map(s => s.audio));
   const color = normalize(samples.map(s => s.color));
-  const total = weights.motion + weights.audio + weights.color + weights.stability || 1;
+  const presence = presenceWeight ? normalize(samples.map(s => s.presence ?? 0)) : null;
+  const total = weights.motion + weights.audio + weights.color + weights.stability + presenceWeight || 1;
   return samples.map((s, i) => {
     const stability = 1 - motion[i];
-    let score = (weights.motion * motion[i] + weights.audio * audio[i] + weights.color * color[i] + weights.stability * stability) / total;
+    let score = (weights.motion * motion[i] + weights.audio * audio[i] + weights.color * color[i] + weights.stability * stability + (presence ? presenceWeight * presence[i] : 0)) / total;
     // 검은 화면, 하얗게 날아간 화면, 정지된 자막 화면은 피합니다.
     if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
     if (s.color < 0.02) score *= 0.5;

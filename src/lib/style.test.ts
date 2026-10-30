@@ -30,3 +30,13 @@ describe("parseStyle", () => {
     expect(style.effects.has("grain")).toBe(false);
   });
 });
+
+describe("배경음악 템포", () => {
+  it("장르별 기본 템포와 직접 적은 템포를 구분한다", async () => {
+    const { defaultBpm } = await import("./style");
+    expect(defaultBpm("hype")).toBe(140);
+    expect(defaultBpm("emotional")).toBe(80);
+    expect(parseStyle("감성 95bpm").bpmExplicit).toBe(true);
+    expect(parseStyle("감성").bpmExplicit).toBe(false);
+  });
+});

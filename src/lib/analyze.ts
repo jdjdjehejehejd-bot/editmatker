@@ -1,5 +1,6 @@
 // 내려받은 영상을 브라우저에서 훑어 프레임별 움직임·색·소리 세기를 측정합니다.
 
+import { interestPoint } from "./framing";
 import { detectCuts, type FrameSample } from "./highlights";
 
 const W = 64;
@@ -182,8 +183,9 @@ export async function analyzeVideo(
       for (let j = 0; j < n; j++) motion += Math.abs(luma[j] - previous[j]);
       motion /= n;
     }
+    const focus = interestPoint(pixels, luma, previous, W, H);
     previous = luma;
-    raw.push({ t: times[i], motion, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean });
+    raw.push({ t: times[i], motion, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, focusX: focus.x, focusY: focus.y, presence: focus.presence });
     onProgress((i + 1) / times.length);
   }
 
