@@ -3,6 +3,7 @@ import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, t
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
+import { loadStockKeys, saveStockKeys, type StockKeys } from "./lib/stock";
 import { checkUserInput, isNsfwRequested, isTextAllowed } from "./lib/moderation";
 import { BUILTIN_PRESETS, loadPresets, matchesPreset, savePresets, upsertPreset, type Preset, type PresetSettings } from "./lib/presets";
 import { parseTopicInput, type TopicSpec } from "./lib/topic";
@@ -63,6 +64,13 @@ export default function App() {
   const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
+  const [stockKeys, setStockKeys] = useState<StockKeys>(() => loadStockKeys());
+  const updateStockKey = (provider: keyof StockKeys, value: string) =>
+    setStockKeys(current => {
+      const next = { ...current, [provider]: value };
+      saveStockKeys(next);
+      return next;
+    });
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
   const [run, setRun] = useState<RunSnapshot | null>(null);
 
@@ -198,7 +206,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -507,14 +515,28 @@ export default function App() {
               <Segmented options={["any", "reusable"] as LicenseMode[]} value={licenseMode} onChange={setLicenseMode} format={mode => (mode === "any" ? "모든 공개 영상" : "재사용 가능만")} />
               <small className="hint">
                 {licenseMode === "any"
-                  ? `${isMobile ? "Reddit" : "YouTube·Reddit"} 위주로 찾아요. 공개적으로 올리려면 원작자 허락이 필요할 수 있어요.`
-                  : "Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 자유롭게 공유할 수 있어요."}
+                  ? `${isMobile ? "Reddit" : "YouTube·Reddit"} 위주로 찾고 스톡 영상(Pexels·Pixabay·Mixkit)도 써요. 공개적으로 올리려면 원작자 허락이 필요할 수 있어요.`
+                  : "Public domain · CC0 · CC BY · CC BY-SA 영상과 무료 스톡 영상(Pexels·Pixabay·Mixkit)만 써서 자유롭게 공유할 수 있어요."}
               </small>
+              <details className="stock-keys">
+                <summary>
+                  스톡 영상 API 키 <small>{stockKeys.pexels || stockKeys.pixabay ? "입력됨" : "Mixkit은 키 없이 사용"}</small>
+                </summary>
+                <label>
+                  <span>Pexels</span>
+                  <input className="select" type="password" autoComplete="off" placeholder="pexels.com/api 에서 무료 발급" value={stockKeys.pexels} onChange={e => updateStockKey("pexels", e.target.value)} />
+                </label>
+                <label>
+                  <span>Pixabay</span>
+                  <input className="select" type="password" autoComplete="off" placeholder="pixabay.com/api/docs 에서 무료 발급" value={stockKeys.pixabay} onChange={e => updateStockKey("pixabay", e.target.value)} />
+                </label>
+                <small className="hint">키는 이 기기에만 저장돼요. 비워 두면 서버에 설정된 키(있으면)를 써요.</small>
+              </details>
             </div>
 
             {licenseMode === "any" && isMobile && !helper.ytDlp && (
               <div className="helper">
-                <b>휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive에서 찾아요. YouTube는 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
+                <b>휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive·스톡 영상에서 찾아요. YouTube는 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
               </div>
             )}
 

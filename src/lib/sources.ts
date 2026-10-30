@@ -1,14 +1,15 @@
 // 주제를 해석해 관련 영상을 찾습니다. 기본은 YouTube·Reddit 위주로 라이선스와 관계없이 찾고,
-// Wikimedia Commons·Internet Archive는 보충용으로 씁니다. 원하면 2차 편집이 허용되는
-// 라이선스(Commons·Internet Archive)만으로 좁힐 수 있습니다.
+// Wikimedia Commons·Internet Archive·스톡 영상(Pexels·Pixabay·Mixkit)은 보충용으로 씁니다. 원하면 2차 편집이
+// 허용되는 라이선스(Commons·Internet Archive·스톡)만으로 좁힐 수 있습니다.
 
 import { LIMITS } from "./device";
 import { searchReddit, searchYouTube } from "./social";
+import { searchStock, type StockKeys } from "./stock";
 import { topicNames, type TopicInfo } from "./topic";
 
 export { resolveTopic, type TopicInfo } from "./topic";
 
-export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive";
+export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive" | "Pexels" | "Pixabay" | "Mixkit";
 
 /** reusable: 재사용 가능한 라이선스만, any: 라이선스와 관계없이 공개된 영상 전체 */
 export type LicenseMode = "reusable" | "any";
@@ -414,7 +415,8 @@ export async function findSources(
   hints: string[],
   mode: LicenseMode,
   helper: string | null,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  stockKeys: StockKeys = { pexels: "", pixabay: "" }
 ): Promise<{ sources: SourceVideo[]; reports: SearchReport[] }> {
   const reports: SearchReport[] = [];
   const run = async (provider: Provider, search: (stats: SearchStats) => Promise<SourceVideo[]>) => {
@@ -435,6 +437,9 @@ export async function findSources(
     social ? run("Reddit", stats => searchReddit(topic, hints, helper, signal, stats)) : Promise.resolve([]),
     run("Wikimedia Commons", stats => searchCommons(topic, hints, mode, signal, stats)),
     run("Internet Archive", stats => searchArchive(topic, hints, mode, signal, stats)),
+    run("Pexels", stats => searchStock("pexels", topic, hints, stockKeys, signal, stats)),
+    run("Pixabay", stats => searchStock("pixabay", topic, hints, stockKeys, signal, stats)),
+    run("Mixkit", stats => searchStock("mixkit", topic, hints, stockKeys, signal, stats)),
   ]);
   const unique = new Map<string, SourceVideo>();
   for (const source of results.flat()) if (!unique.has(source.id)) unique.set(source.id, source);

@@ -8,6 +8,7 @@ import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
+import type { StockKeys } from "./stock";
 import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
@@ -33,6 +34,8 @@ export interface PipelineInput {
   licenseMode: LicenseMode;
   /** 로컬 도우미 주소 (YouTube 영상에 필요) */
   helper: string | null;
+  /** Pexels·Pixabay API 키 (비어 있으면 서버 환경 변수 키를 씀) */
+  stockKeys?: StockKeys;
   sourceCount: number;
   musicFile: File | null;
   /** 인터넷에서 "주제 edit"를 찾아 편집 스타일을 배울지 */
@@ -111,14 +114,14 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const badTopic = infos.find(info => !isTopicAllowed(info, policy));
   if (badTopic) throw new GenerationBlockedError(`생성 불가 — 주제 "${badTopic.query}"는 검열 대상이에요.`);
 
-  const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
+  const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit·스톡 영상" : "Reddit·스톡 영상") : "Wikimedia Commons·Internet Archive·스톡 영상";
   const queriesFor = (info: TopicInfo) =>
     input.licenseMode === "any" ? expandQueries(info, style.searchHints).map(q => q.q) : [info.englishLabel ?? info.label, ...(info.related ?? []).slice(0, 3)];
   const groups = infos.map((info, i) => ({ label: info.label, weight: specs[i].weight, queries: queriesFor(info) }));
   events.queries(groups);
   const queryCount = groups.reduce((sum, g) => sum + g.queries.length, 0);
   events.step("search", `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
-  const found = await Promise.all(infos.map(info => findSources(info, style.searchHints, input.licenseMode, input.helper, signal)));
+  const found = await Promise.all(infos.map(info => findSources(info, style.searchHints, input.licenseMode, input.helper, signal, input.stockKeys)));
 
   // 주제마다 쓸 수 있는 후보를 고릅니다(검열·관련성). 여러 주제에 같은 영상이 걸리면 아래에서 한 주제에만 줍니다.
   const censoredIds = new Set<string>();
