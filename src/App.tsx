@@ -64,8 +64,6 @@ export default function App() {
   const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
-  // 지운 뒤 같은 파일을 다시 고를 수 있게 파일 입력을 새로 만듭니다.
-  const [uploadKey, setUploadKey] = useState(0);
   const [uploadsOnly, setUploadsOnly] = useState(false);
   const canStart = Boolean(topic.trim() || uploadFiles.length);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
@@ -170,11 +168,12 @@ export default function App() {
   const [checkingHelper, setCheckingHelper] = useState(false);
   const [helperMissing, setHelperMissing] = useState(false);
 
-  const connectHelper = async () => {
+  /** manual: "YouTube 연결"을 직접 눌렀을 때만 못 찾았다는 안내를 보여 줍니다(자동 확인 실패는 조용히). */
+  const connectHelper = async (manual = false) => {
     setCheckingHelper(true);
     const status = await detectHelper();
     setHelper(status);
-    setHelperMissing(!status.base);
+    setHelperMissing(manual && !status.base);
     setCheckingHelper(false);
     return status;
   };
@@ -372,27 +371,20 @@ export default function App() {
             </label>
             <div className="field">
               <span>내 영상으로 편집</span>
-              <label className="file upload">
-                <input key={uploadKey} type="file" accept="video/*" multiple onChange={e => setUploadFiles([...(e.target.files ?? [])].slice(0, MAX_UPLOADS))} />
-                <small>
-                  {uploadFiles.length
-                    ? `${uploadFiles.length}개 · ${uploadFiles.map(f => f.name).join(", ")}`
-                    : `편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 올린 영상만, 주제도 쓰면 찾은 영상과 섞어요`}
-                </small>
-              </label>
+              <FilePick
+                accept="video/*"
+                multiple
+                max={MAX_UPLOADS}
+                files={uploadFiles}
+                onChange={setUploadFiles}
+                label="영상 올리기"
+                hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 올린 영상만, 주제도 쓰면 찾은 영상과 섞어요`}
+              />
               {uploadFiles.length > 0 && (
                 <label className="toggle">
                   <input type="checkbox" checked={uploadsOnly} onChange={e => setUploadsOnly(e.target.checked)} />
                   <span>영상 찾지 않고 올린 영상만 편집{topic.trim() ? " (주제는 제목·스타일에만 써요)" : ""}</span>
                 </label>
-              )}
-              {uploadFiles.length > 0 && (
-                <button type="button" className="chip" onClick={() => {
-                    setUploadFiles([]);
-                    setUploadKey(key => key + 1);
-                  }}>
-                  올린 영상 지우기
-                </button>
               )}
             </div>
             {topicSpecs.length > 1 || topicSpecs.some(spec => spec.weight !== 1) ? (
@@ -411,10 +403,15 @@ export default function App() {
               <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
             </label>
 
-            <div className="style-editor" aria-label="편집 스타일">
-              <div className="style-head">
+            <details className="style-editor fold" aria-label="편집 스타일">
+              <summary className="style-head">
                 <strong>편집 스타일</strong>
-                <small>{hasOverrides ? "직접 설정" : "특징에서 자동"} · {preview.label}</small>
+                <small>
+                  {hasOverrides ? "직접 설정" : "특징에서 자동"} · {preview.label} · {musicFile ? "BPM 자동" : `${preview.bpm} BPM`} · {GRADE_LABEL[preview.grade]}
+                </small>
+              </summary>
+              <div className="style-actions">
+                <small>비워 둔 항목은 특징 문장에서 자동으로 정해요</small>
                 <button type="button" className="chip" onClick={() => setOverrides({})} disabled={!hasOverrides}>
                   자동으로
                 </button>
@@ -492,7 +489,7 @@ export default function App() {
                   </button>
                 ))}
               </div>
-            </div>
+            </details>
 
             <div className="row">
               <div className="field">
@@ -506,10 +503,17 @@ export default function App() {
             </div>
 
             <div className="row">
+              {uploadFiles.length > 0 && (uploadsOnly || !topic.trim()) ? (
+                <div className="field">
+                  <span>영상 수</span>
+                  <small className="hint fixed-count">올린 영상 {uploadFiles.length}개만 써요</small>
+                </div>
+              ) : (
               <label className="field">
-                <span>영상 수 · {sourceCount}개</span>
+                <span>영상 수 · {uploadFiles.length ? `찾을 영상 ${sourceCount}개 + 올린 영상 ${uploadFiles.length}개` : `${sourceCount}개`}</span>
                 <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} style={{ "--fill": `${((sourceCount - 2) / (LIMITS.maxSources - 2)) * 100}%` } as CSSProperties} />
               </label>
+              )}
               <label className="field">
                 <span>배경음악</span>
                 <select className="select" value={musicStyle} onChange={e => setMusicStyle(e.target.value as MusicStyle)} disabled={Boolean(musicFile)} aria-label="배경음악 스타일">
@@ -519,13 +523,19 @@ export default function App() {
                     </option>
                   ))}
                 </select>
-                <div className="file">
-                  <input type="file" accept="audio/*" onChange={e => setMusicFile(e.target.files?.[0] ?? null)} />
-                  <small>{musicFile ? `${musicFile.name} (내 음악 사용)` : "또는 내 음악 파일 — 넣으면 그 음악의 템포에 맞춰요"}</small>
-                </div>
+                <FilePick accept="audio/*" max={1} files={musicFile ? [musicFile] : []} onChange={files => setMusicFile(files[0] ?? null)} label="내 음악" hint="넣으면 그 음악의 템포에 맞춰요" />
               </label>
             </div>
 
+            <details className="advanced fold">
+              <summary>
+                <strong>세부 설정</strong>
+                <small>
+                  {licenseMode === "any" ? "모든 공개 영상" : "재사용 가능만"}
+                  {learnOnline || referenceFiles.length ? " · 스타일 학습 켜짐" : ""}
+                  {stockKeys.pexels || stockKeys.pixabay ? " · API 키" : ""}
+                </small>
+              </summary>
             <div className="field">
               <span>참고 에딧 · 스타일 배우기</span>
               <div className="learn">
@@ -533,10 +543,7 @@ export default function App() {
                   <input type="checkbox" checked={learnOnline} onChange={e => setLearnOnline(e.target.checked)} />
                   <span>인터넷에서 "주제 edit" 찾아 배우기</span>
                 </label>
-                <label className="file">
-                  <input type="file" accept="video/*" multiple onChange={e => setReferenceFiles([...(e.target.files ?? [])].slice(0, 3))} />
-                  <small>{referenceFiles.length ? referenceFiles.map(f => f.name).join(", ") : "마음에 드는 에딧 영상을 올리면 컷 리듬·템포·색감을 따라 해요 (최대 3개)"}</small>
-                </label>
+                <FilePick accept="video/*" multiple max={3} files={referenceFiles} onChange={setReferenceFiles} label="참고 에딧 올리기" hint="마음에 드는 에딧 영상을 올리면 컷 리듬·템포·색감을 따라 해요 (최대 3개)" />
               </div>
             </div>
 
@@ -569,6 +576,7 @@ export default function App() {
                 <b>휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive·스톡 영상에서 찾아요. YouTube는 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
               </div>
             )}
+            </details>
 
             {licenseMode === "any" && !isMobile && (
               <div className={`helper ${helper.ytDlp ? "on" : ""}`}>
@@ -586,7 +594,7 @@ export default function App() {
                     <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미-pc-전용" target="_blank" rel="noreferrer">
                       방법 보기
                     </a>
-                    <button type="button" className="chip connect" onClick={connectHelper} disabled={checkingHelper}>
+                    <button type="button" className="chip connect" onClick={() => connectHelper(true)} disabled={checkingHelper}>
                       {checkingHelper ? "확인 중…" : "YouTube 연결"}
                     </button>
                     {helperMissing && <em className="missing">도우미를 찾지 못했어요. 터미널에서 실행 중인지 확인하세요.</em>}
@@ -767,10 +775,10 @@ export default function App() {
 
         <footer className="notes">
           <p>
-            영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 제목·설명에 주제 이름이 나오는 영상만 씁니다. 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>은 재사용 허가가 없는 영상도 쓰므로 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 자유롭게 공유하려면 <b>재사용 가능만</b>을 고르세요.
+            영상은 YouTube·Reddit(모든 공개 영상 모드), Wikimedia Commons·Internet Archive, 스톡 영상(Pexels·Pixabay·Mixkit)에서 가져오며, 제목·설명에 주제 이름이 나오는 영상만 씁니다. 직접 올린 영상도 쓸 수 있어요. 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>은 재사용 허가가 없는 영상도 쓰므로 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 자유롭게 공유하려면 <b>재사용 가능만</b>을 고르세요.
           </p>
           <p>검열: 입력·검색어·영상 제목·채널·분류에서 부적절한 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사합니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
-          <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다.</p>
+          <p>모든 처리는 브라우저 안에서 이루어지며 만든 영상과 올린 영상은 서버로 업로드되지 않습니다.</p>
         </footer>
       </main>
     </div>
@@ -822,6 +830,58 @@ const ShieldIcon = () => (
     <path d="m8.8 12 2.2 2.2 4.2-4.4" />
   </Icon>
 );
+
+/** 기본 파일 입력 대신 쓰는 버튼 + 고른 파일 목록. 여러 개면 고를 때마다 더하고, 하나씩 뺄 수 있습니다. */
+function FilePick({ accept, multiple = false, max, files, onChange, label, hint }: { accept: string; multiple?: boolean; max: number; files: File[]; onChange: (files: File[]) => void; label: string; hint: string }) {
+  // 같은 파일을 다시 고를 수 있게 고를 때마다 입력을 새로 만듭니다.
+  const [inputKey, setInputKey] = useState(0);
+  const pick = (picked: File[]) => {
+    const merged = multiple ? [...files, ...picked.filter(p => !files.some(f => f.name === p.name && f.size === p.size))] : picked;
+    onChange(merged.slice(0, max));
+    setInputKey(key => key + 1);
+  };
+  const full = multiple && files.length >= max;
+  return (
+    <div className="picker">
+      <div className="picker-row">
+        <label className={`pick-button ${full ? "disabled" : ""}`}>
+          <input key={inputKey} type="file" accept={accept} multiple={multiple} disabled={full} onChange={e => pick([...(e.target.files ?? [])])} />
+          <span aria-hidden="true">＋</span>
+          {files.length && !multiple ? "바꾸기" : files.length ? "더 올리기" : label}
+        </label>
+        {files.length > 0 && (
+          <small className="pick-count">
+            {multiple ? `${files.length}/${max}개` : ""}
+            {multiple && files.length > 1 && (
+              <button type="button" className="link" onClick={() => onChange([])}>
+                모두 빼기
+              </button>
+            )}
+          </small>
+        )}
+      </div>
+      {files.length ? (
+        <ul className="pick-list">
+          {files.map((file, i) => (
+            <li key={`${file.name}-${file.size}-${i}`}>
+              <span>{file.name}</span>
+              <small>{formatBytes(file.size)}</small>
+              <button type="button" aria-label={`${file.name} 빼기`} onClick={() => onChange(files.filter((_, j) => j !== i))}>
+                ×
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <small className="hint">{hint}</small>
+      )}
+    </div>
+  );
+}
+
+function formatBytes(bytes: number) {
+  return bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)}MB` : `${Math.max(1, Math.round(bytes / 1024))}KB`;
+}
 
 function Segmented<T extends string | number>({ options, value, onChange, format }: { options: T[]; value: T; onChange: (value: T) => void; format?: (value: T) => string }) {
   return (
