@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildArchiveQuery, buildCommonsQueries, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
+import { buildArchiveQuery, buildCommonsQueries, inspectArchiveFiles, REASON, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
 
 const canPlayWebm = (mime: string) => mime.includes("webm");
 
@@ -205,5 +205,13 @@ describe("휴대폰 화질 선택", () => {
     };
     // 40분 × 1Mbps = 300MB(너무 큼), 360p = 180MB(너무 큼), 240p = 75MB → 240p
     expect(parseCommonsPage(page, 1, "any", () => true)?.mediaUrl).toBe("https://upload.wikimedia.org/240.webm");
+  });
+});
+
+describe("Internet Archive 비공개 파일", () => {
+  it("private 파일은 고르지 않고, 전부 비공개면 내려받기 제한으로 셈", () => {
+    const canPlay = () => true;
+    expect(inspectArchiveFiles([{ name: "a.mp4", size: "1000", private: "true" }, { name: "b.mp4", size: "2000" }], canPlay).file?.name).toBe("b.mp4");
+    expect(inspectArchiveFiles([{ name: "a.mp4", size: "1000", private: "true" }], canPlay)).toEqual({ file: null, reason: REASON.restricted });
   });
 });

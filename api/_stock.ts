@@ -14,6 +14,16 @@ export function isStockMediaUrl(value: string): boolean {
   }
 }
 
+/** 프록시로 받아 줄 수 있는 Internet Archive 파일 주소인지 (https://archive.org/download/...) */
+export function isArchiveMediaUrl(value: string): boolean {
+  try {
+    const url = new URL(value);
+    return url.protocol === "https:" && url.hostname === "archive.org" && url.pathname.startsWith("/download/") && !url.port && !url.username && !url.password;
+  } catch {
+    return false;
+  }
+}
+
 /** Mixkit 검색 주소의 경로 조각 ("Tokyo Tower" → "tokyo-tower"). 라틴 문자가 없으면 null */
 export function mixkitSlug(q: string): string | null {
   const slug = q
