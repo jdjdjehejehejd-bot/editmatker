@@ -161,7 +161,7 @@ describe("못 쓴 이유", () => {
     const base = { mediatype: "VIDEO", duration: 60, extmetadata: { LicenseShortName: { value: "CC0" } }, derivatives: [{ src: "https://upload.wikimedia.org/a.webm", type: "video/webm", height: 480, bandwidth: 1000 }] };
     const noWebm = (mime: string) => !mime.includes("webm");
     expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [base] }, 1, "any", noWebm).reason).toBe(REASON.format);
-    expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [{ ...base, duration: 4000 }] }, 1, "any").reason).toBe(REASON.length);
+    expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [{ ...base, duration: 6000 }] }, 1, "any").reason).toBe(REASON.length);
     expect(inspectCommonsPage({ title: "File:a.webm", videoinfo: [{ ...base, extmetadata: { LicenseShortName: { value: "CC BY-NC 4.0" } } }] }, 1, "reusable").reason).toBe(REASON.license);
     expect(inspectCommonsPage({ title: "File:a.jpg", imageinfo: [{ mediatype: "BITMAP" }] }, 1, "any").reason).toBeNull();
   });
@@ -182,5 +182,28 @@ describe("못 쓴 이유", () => {
     expect(summarizeReports([{ provider: "Internet Archive", usable: 0, scanned: 10, rejected: { "너무 짧거나 김": 6, "파일이 너무 큼": 3, "영상 파일 없음": 1 } }])).toBe(
       "Internet Archive: 10개 찾았지만 쓸 수 있는 영상 없음 — 너무 짧거나 김 6개, 파일이 너무 큼 3개, 영상 파일 없음 1개"
     );
+  });
+});
+
+describe("휴대폰 화질 선택", () => {
+  it("긴 영상은 기기 크기 제한 안에 들어오는 낮은 화질 변환본을 고른다", () => {
+    const page = {
+      pageid: 9,
+      title: "File:Long_interview.webm",
+      videoinfo: [
+        {
+          mediatype: "VIDEO",
+          duration: 40 * 60,
+          extmetadata: { LicenseShortName: { value: "CC0" } },
+          derivatives: [
+            { src: "https://upload.wikimedia.org/480.webm", type: "video/webm", height: 480, bandwidth: 1_000_000 },
+            { src: "https://upload.wikimedia.org/360.webm", type: "video/webm", height: 360, bandwidth: 600_000 },
+            { src: "https://upload.wikimedia.org/240.webm", type: "video/webm", height: 240, bandwidth: 250_000 },
+          ],
+        },
+      ],
+    };
+    // 40분 × 1Mbps = 300MB(너무 큼), 360p = 180MB(너무 큼), 240p = 75MB → 240p
+    expect(parseCommonsPage(page, 1, "any", () => true)?.mediaUrl).toBe("https://upload.wikimedia.org/240.webm");
   });
 });

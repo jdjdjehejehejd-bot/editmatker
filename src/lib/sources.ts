@@ -2,6 +2,7 @@
 // Wikimedia Commons·Internet Archive는 보충용으로 씁니다. 원하면 2차 편집이 허용되는
 // 라이선스(Commons·Internet Archive)만으로 좁힐 수 있습니다.
 
+import { LIMITS } from "./device";
 import { searchReddit, searchYouTube } from "./social";
 import { topicNames, type TopicInfo } from "./topic";
 
@@ -71,8 +72,11 @@ export const REASON = {
 
 
 export const MAX_SOURCE_BYTES = 150 * 1024 * 1024;
+/** 이 기기에서 실제로 받을 수 있는 크기 (휴대폰은 더 작음) — 화질을 고를 때도 같은 기준을 써야 받다가 실패하지 않습니다. */
+const deviceBytes = () => Math.min(MAX_SOURCE_BYTES, LIMITS.sourceBytes);
 const MIN_DURATION = 3;
-const MAX_DURATION = 25 * 60;
+// 인물 영상은 긴 인터뷰·강연이 많아 넉넉히 봅니다. 너무 큰 파일은 낮은 화질 변환본을 고르거나 크기 제한이 막아 줍니다.
+const MAX_DURATION = 90 * 60;
 const MAX_ARCHIVE_DURATION = 90 * 60;
 
 type CanPlay = (mime: string) => boolean;
@@ -155,10 +159,10 @@ export function pickCommonsMedia(info: any, canPlay: CanPlay = defaultCanPlay): 
     .sort((a, b) => a.score - b.score || (a.d.bandwidth ?? 0) - (b.d.bandwidth ?? 0));
   for (const { d } of sized) {
     const bytes = duration && d.bandwidth ? Math.round((d.bandwidth * duration) / 8) : null;
-    if (bytes === null || bytes <= MAX_SOURCE_BYTES) return { url: d.src, bytes };
+    if (bytes === null || bytes <= deviceBytes()) return { url: d.src, bytes };
   }
   const size = Number(info?.size);
-  if (typeof info?.url === "string" && isUploadHost(info.url) && canPlay(String(info.mime ?? "")) && size > 0 && size <= MAX_SOURCE_BYTES) {
+  if (typeof info?.url === "string" && isUploadHost(info.url) && canPlay(String(info.mime ?? "")) && size > 0 && size <= deviceBytes()) {
     return { url: info.url, bytes: size };
   }
   return null;
@@ -317,7 +321,7 @@ export function inspectArchiveFiles(files: any[], canPlay: CanPlay = defaultCanP
   if (!playable.length) return { file: null, reason: REASON.format };
   const fitting = playable.filter(f => f.duration === null || (f.duration >= MIN_DURATION && f.duration <= MAX_ARCHIVE_DURATION));
   if (!fitting.length) return { file: null, reason: REASON.length };
-  const small = fitting.filter(f => f.bytes === null || f.bytes <= MAX_SOURCE_BYTES);
+  const small = fitting.filter(f => f.bytes === null || f.bytes <= deviceBytes());
   if (!small.length) return { file: null, reason: REASON.size };
   small.sort((a, b) => (a.bytes ?? Infinity) - (b.bytes ?? Infinity));
   const { name, bytes, duration } = small[0];
