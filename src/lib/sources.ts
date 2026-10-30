@@ -25,6 +25,8 @@ export interface SourceVideo {
   mediaUrl: string;
   /** 출처가 성인 콘텐츠로 표시한 영상 (예: Reddit NSFW 게시물) — 검열 비율 계산에 쓰고 받지는 않음 */
   nsfw?: boolean;
+  /** 주제의 Commons 분류·Wikidata 대표 영상처럼 주제와 직접 연결된 영상 (이름이 없어도 관련 있다고 봄) */
+  trusted?: boolean;
   /** 분류·태그 등 검열에 함께 쓰는 설명 */
   tags?: string;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
@@ -194,19 +196,20 @@ async function commonsQuery(params: Record<string, string>, signal?: AbortSignal
   return Object.values(data?.query?.pages ?? {});
 }
 
-/** Commons 검색어: 분류 → 이름(+특징) → 별칭 → 관련 주제 순. 뒤로 갈수록 관련도를 낮게 매깁니다. */
+/**
+ * Commons 검색어: 이름(+특징) → 별칭 → 이름+관련 주제 순. 뒤로 갈수록 관련도를 낮게 매깁니다.
+ * 주제의 Commons 분류는 searchCommons가 따로 검색합니다. 이름은 항상 따옴표로 묶어 정확히 찾습니다.
+ */
 export function buildCommonsQueries(topic: TopicInfo, hints: string[]): string[] {
   const queries: string[] = [];
   const quote = (text: string) => `"${text.replace(/"/g, "")}"`;
   const names = [...new Set([topic.englishLabel, topic.query].filter((v): v is string => Boolean(v)))];
-  if (topic.commonsCategory) queries.push(`filetype:video incategory:${quote(topic.commonsCategory)}`);
   for (const name of names) {
     if (hints.length) queries.push(`filetype:video ${quote(name)} ${hints.join(" ")}`);
     queries.push(`filetype:video ${quote(name)}`);
   }
-  if (names[0]) queries.push(`filetype:video ${names[0]}`);
   for (const alias of (topic.aliases ?? []).slice(0, 2)) queries.push(`filetype:video ${quote(alias)}`);
-  for (const related of (topic.related ?? []).slice(0, 3)) queries.push(`filetype:video ${quote(related)}`);
+  if (names[0]) for (const related of (topic.related ?? []).slice(0, 3)) queries.push(`filetype:video ${quote(names[0])} ${quote(related)}`);
   return [...new Set(queries)];
 }
 
@@ -214,19 +217,27 @@ export async function searchCommons(topic: TopicInfo, hints: string[], mode: Lic
   const found = new Map<string, SourceVideo>();
   const seen = new Set<string>();
   const errors: unknown[] = [];
-  const add = (pages: any[], base: number) => {
+  const add = (pages: any[], base: number, trusted = false) => {
     for (const page of pages) {
       const info = page?.videoinfo?.[0] ?? page?.imageinfo?.[0];
       if (info?.mediatype === "VIDEO") seen.add(String(page.pageid ?? page.title));
       const rank = Number(page?.index) || 1;
       const source = parseCommonsPage(page, base - rank * 0.01, mode);
-      if (source && !found.has(source.id)) found.set(source.id, source);
+      if (!source) continue;
+      const existing = found.get(source.id);
+      if (!existing) found.set(source.id, { ...source, trusted });
+      else if (trusted) existing.trusted = true;
     }
   };
 
+  // 주제와 직접 연결된 영상: Wikidata 대표 영상, 주제의 Commons 분류
   if (topic.wikidataVideos.length) {
     const titles = topic.wikidataVideos.slice(0, 20).map(name => `File:${name}`).join("|");
-    add(await commonsQuery({ titles }, signal).catch(() => []), 3);
+    add(await commonsQuery({ titles }, signal).catch(() => []), 3, true);
+  }
+  if (topic.commonsCategory) {
+    const pages = await commonsQuery({ generator: "search", gsrsearch: `filetype:video incategory:"${topic.commonsCategory.replace(/"/g, "")}"`, gsrnamespace: "6", gsrlimit: "25" }, signal).catch(() => []);
+    add(pages, 2.6, true);
   }
   const queries = buildCommonsQueries(topic, hints);
   const results = await Promise.all(
@@ -264,9 +275,10 @@ function parseLength(value: unknown): number | null {
 
 /** Internet Archive 검색어. `related`면 주제 대신 관련 주제들로 찾습니다. */
 export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: LicenseMode, related = false): string {
-  const names = related ? (topic.related ?? []).slice(0, 4) : topicNames(topic).filter(n => !/[\uac00-\ud7a3]/.test(n) || !topic.englishLabel).slice(0, 4);
-  const any = `(${names.map(n => `"${n.replace(/"/g, "")}"`).join(" OR ")})`;
-  const terms = [any, ...(related ? [] : hints)].join(" ");
+  const quoteAll = (list: string[]) => `(${list.map(n => `"${n.replace(/"/g, "")}"`).join(" OR ")})`;
+  const names = topicNames(topic).filter(n => !/[\uac00-\ud7a3]/.test(n) || !topic.englishLabel).slice(0, 4);
+  // 관련 주제 검색도 반드시 주제 이름과 함께 찾습니다.
+  const terms = related ? `${quoteAll(names)} AND ${quoteAll((topic.related ?? []).slice(0, 4))}` : [quoteAll(names), ...hints].join(" ");
   // 대출 전용(내려받기 불가) 컬렉션은 처음부터 뺍니다.
   const base = `(${terms}) AND mediatype:(movies) AND NOT collection:(inlibrary OR printdisabled)`;
   if (mode === "any") return base;
@@ -379,7 +391,9 @@ export function rankSources(sources: SourceVideo[], topic: TopicInfo): SourceVid
       const titleHit = names.some(name => source.title.toLowerCase().includes(name)) ? 0.5 : 0;
       // 너무 짧거나 너무 긴 영상은 하이라이트를 뽑기 어렵습니다.
       const lengthFit = source.duration === null ? 0 : source.duration >= 15 && source.duration <= 600 ? 0.25 : 0;
-      return { source, score: source.relevance + titleHit + lengthFit };
+      // 주제의 Commons 분류·대표 영상은 이름이 없어도 확실히 관련 있으므로 앞에 둡니다.
+      const trusted = source.trusted ? 0.4 : 0;
+      return { source, score: source.relevance + titleHit + lengthFit + trusted };
     })
     .sort((a, b) => b.score - a.score)
     .map(entry => entry.source);

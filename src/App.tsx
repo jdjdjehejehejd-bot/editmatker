@@ -1,9 +1,9 @@
-import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
 import { detectHelper, rememberedHelper, type HelperStatus } from "./lib/social";
-import { checkUserInput } from "./lib/moderation";
+import { checkUserInput, isTextAllowed } from "./lib/moderation";
 import { parseTopicInput } from "./lib/topic";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
 import { EFFECT_LABEL, GRADE_LABEL, parseStyle } from "./lib/style";
@@ -18,10 +18,10 @@ const STEPS: { id: StepId; label: string }[] = [
 ];
 
 const EXAMPLES = [
+  { topic: "손흥민", features: "골 장면, 신나는 빠른 컷, 플래시" },
+  { topic: "뉴진스", features: "무대, 감성, 따뜻한 색감, 슬로우모션" },
   { topic: "아폴로 11호", features: "웅장하고 시네마틱하게, 로켓 발사, 슬로우모션" },
-  { topic: "고양이", features: "귀엽고 신나는 빠른 컷, 비트에 맞춰 줌, 선명한 색" },
   { topic: "Tokyo", features: "레트로 신스웨이브, 야경, 글리치, 네온" },
-  { topic: "바다", features: "잔잔한 감성, 파도, 따뜻한 색감, 필름 그레인" },
 ];
 
 const SOURCE_COLORS = ["#f26a4b", "#4bb3f2", "#7bd389", "#f2c94b", "#b57bf2", "#f27bb5"];
@@ -49,6 +49,8 @@ export default function App() {
 
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stageRef = useRef<HTMLElement>(null);
+  const sourcesRef = useRef<HTMLElement>(null);
+  const [liked, setLiked] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
   const preview = useMemo(() => parseStyle(features), [features]);
   const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
@@ -154,6 +156,14 @@ export default function App() {
 
   const stop = () => abortRef.current?.abort();
 
+  const downloadVideo = () => {
+    if (!output) return;
+    const a = document.createElement("a");
+    a.href = output.url;
+    a.download = output.file.name;
+    a.click();
+  };
+
   const downloadPlan = () => {
     if (!result) return;
     const json = {
@@ -173,288 +183,370 @@ export default function App() {
 
   const stepIndex = step ? STEPS.findIndex(s => s.id === step.id) : -1;
   const colorOf = (id: string) => SOURCE_COLORS[Math.max(0, loaded.findIndex(s => s.id === id)) % SOURCE_COLORS.length];
+  const isBlockedError = Boolean(error?.startsWith("생성 불가"));
+  const reelTitle = result?.title ?? (topicSpecs.map(spec => spec.term).join(" × ") || "editmatker");
+  const hashtags = [preview.label.split("·")[0], GRADE_LABEL[preview.grade], ...[...preview.effects].slice(0, 3).map(effect => EFFECT_LABEL[effect])]
+    .map(tag => `#${tag.replace(/\s+/g, "")}`)
+    .join(" ");
+  const barState = (i: number) => (status === "done" || i < stepIndex ? "done" : i === stepIndex && status === "running" ? "active" : i === stepIndex && status === "error" ? "failed" : "");
+  const statusText =
+    status === "running" && step ? `${STEPS[stepIndex]?.label ?? ""} · ${step.detail}` : status === "done" ? "완성! 아래에서 저장하거나 공유하세요." : null;
 
   return (
     <div className="app">
       <header className="topbar">
-        <div className="brand">
-          <img src="./favicon.svg" alt="" width={28} height={28} />
-          <span>editmatker</span>
+        <div className="topbar-inner">
+          <div className="wordmark">
+            <img src="./favicon.svg" alt="" width={26} height={26} />
+            <span>editmatker</span>
+          </div>
+          <span className="shield" title="부적절한 단어·장면이 있는 영상은 쓰지 않아요">
+            <ShieldIcon /> 검열 켜짐
+          </span>
         </div>
-        <span className="tagline">주제와 특징만 적으면, 하이라이트를 찾아 비트에 맞춰 편집합니다</span>
       </header>
 
-      <main className="layout">
-        <section className="panel form">
-          <h1>
-            무엇으로 <em>에딧</em>을 만들까요?
-          </h1>
-
-          <label className="field">
-            <span>주제</span>
-            <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="예: 손흥민, 3:케인:, 토트넘" maxLength={200} onKeyDown={e => e.key === "Enter" && start()} />
-            <small className="hint">여러 주제는 쉼표로 나눠요. <code>3:케인:</code>처럼 쓰면 그 주제가 3배 비중으로 들어가요.</small>
-          </label>
-          {topicSpecs.length > 1 || topicSpecs.some(spec => spec.weight !== 1) ? (
-            <div className="topic-chips" aria-label="주제 비중">
-              {topicSpecs.map(spec => (
-                <span key={spec.term}>
-                  {spec.term}
-                  <b>{Math.round((spec.weight / topicWeightSum) * 100)}%</b>
-                </span>
-              ))}
+      <main className="feed">
+        <section className="stories" aria-label="주제">
+          {(topicSpecs.length ? topicSpecs : [{ term: "새 주제", weight: 1 }]).map(spec => (
+            <div key={spec.term} className={`story ${topicSpecs.length ? "" : "empty"} ${topicSpecs.length && !isTextAllowed(spec.term) ? "blocked" : ""}`}>
+              <span className="ring">
+                <span className="avatar">{!topicSpecs.length ? "+" : isTextAllowed(spec.term) ? spec.term.slice(0, 1).toUpperCase() : "🚫"}</span>
+              </span>
+              <small>{spec.term}</small>
+              {topicSpecs.length > 1 && <b>{Math.round((spec.weight / topicWeightSum) * 100)}%</b>}
             </div>
-          ) : null}
-
-          <label className="field">
-            <span>특징 · 분위기</span>
-            <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={3} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감, 플래시 컷" />
-          </label>
-
-          <div className="examples">
-            {EXAMPLES.map(example => (
-              <button
-                key={example.topic}
-                type="button"
-                className="chip"
-                onClick={() => {
-                  setTopic(example.topic);
-                  setFeatures(example.features);
-                }}
-              >
-                {example.topic}
-              </button>
-            ))}
-          </div>
-
-          <div className="style-preview" aria-live="polite">
-            <strong>{preview.label}</strong>
-            <span>{musicFile ? "음악 BPM 자동 감지" : `${preview.bpm} BPM`}</span>
-            <span>{GRADE_LABEL[preview.grade]}</span>
-            {[...preview.effects].map(effect => (
-              <span key={effect}>{EFFECT_LABEL[effect]}</span>
-            ))}
-          </div>
-
-          <div className="row">
-            <div className="field">
-              <span>길이</span>
-              <Segmented options={[15, 30, 45, 60]} value={seconds} onChange={setSeconds} format={v => `${v}초`} />
-            </div>
-            <div className="field">
-              <span>화면 비율</span>
-              <Segmented options={["9:16", "16:9", "1:1"] as Aspect[]} value={aspect} onChange={setAspect} />
-            </div>
-          </div>
-
-          <div className="row">
-            <label className="field">
-              <span>사용할 영상 수 · {sourceCount}개</span>
-              <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} style={{ "--fill": `${((sourceCount - 2) / (LIMITS.maxSources - 2)) * 100}%` } as CSSProperties} />
-            </label>
-            <label className="field">
-              <span>배경음악</span>
-              <div className="file">
-                <input type="file" accept="audio/*" onChange={e => setMusicFile(e.target.files?.[0] ?? null)} />
-                <small>{musicFile ? musicFile.name : "비워 두면 분위기에 맞는 비트를 자동 작곡"}</small>
-              </div>
-            </label>
-          </div>
-
-          <div className="field">
-            <span>영상 라이선스</span>
-            <Segmented
-              options={["any", "reusable"] as LicenseMode[]}
-              value={licenseMode}
-              onChange={setLicenseMode}
-              format={mode => (mode === "any" ? "모든 공개 영상" : "재사용 가능만")}
-            />
-            <small className="hint">
-              {licenseMode === "any"
-                ? `${isMobile ? "Reddit" : "YouTube·Reddit"} 위주로 라이선스와 관계없이 찾습니다. 결과물을 공개적으로 올리려면 원작자 허락이 필요할 수 있어요.`
-                : "Wikimedia Commons·Internet Archive의 Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 결과물을 자유롭게 공유할 수 있어요."}
-            </small>
-          </div>
-
-          {licenseMode === "any" && isMobile && !helper.ytDlp && (
-            <div className="helper">
-              <b>📱 휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive에서 영상을 찾아요. YouTube 영상은 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
-            </div>
-          )}
-
-          {licenseMode === "any" && !isMobile && (
-            <div className={`helper ${helper.ytDlp ? "on" : ""}`}>
-              {helper.ytDlp ? (
-                <>
-                  <b>● YouTube 연결됨</b> 로컬 도우미(yt-dlp {helper.ytDlp})로 YouTube·Reddit 영상을 받아요.
-                </>
-              ) : helper.base ? (
-                <>
-                  <b>● 도우미에 yt-dlp가 없어요</b> yt-dlp를 설치한 뒤 도우미를 다시 켜 주세요.
-                </>
-              ) : (
-                <>
-                  <b>○ YouTube 꺼짐</b> 지금은 Reddit 영상만 찾아요. YouTube까지 쓰려면 내 컴퓨터에서 로컬 도우미(<code>pnpm helper</code>)를 켠 뒤 연결하세요.{" "}
-                  <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미-pc-전용" target="_blank" rel="noreferrer">
-                    방법 보기
-                  </a>
-                  <button type="button" className="chip connect" onClick={connectHelper} disabled={checkingHelper}>
-                    {checkingHelper ? "확인 중…" : "YouTube 연결"}
-                  </button>
-                  {helperMissing && <em className="missing">도우미를 찾지 못했어요. 터미널에서 실행 중인지 확인하세요.</em>}
-                </>
-              )}
-            </div>
-          )}
-
-          {blockedInput && <p className="error blocked">🚫 {blockedInput}</p>}
-          <p className="censor-note">🛡 검열 켜짐 · 부적절한 단어가 들어간 입력·영상과 선정적인 장면이 감지된 영상은 쓰지 않아요.</p>
-
-          {status === "running" ? (
-            <button className="primary" type="button" onClick={stop}>
-              중단하기
+          ))}
+          {EXAMPLES.map(example => (
+            <button
+              key={example.topic}
+              type="button"
+              className="story example"
+              onClick={() => {
+                setTopic(example.topic);
+                setFeatures(example.features);
+              }}
+            >
+              <span className="ring muted">
+                <span className="avatar">{example.topic.slice(0, 1)}</span>
+              </span>
+              <small>{example.topic}</small>
             </button>
-          ) : (
-            <button className="primary" type="button" onClick={start} disabled={!topic.trim() || Boolean(blockedInput)}>
-              {blockedInput ? "생성 불가" : status === "done" ? "다시 만들기" : "에딧 만들기"}
-            </button>
-          )}
-
-          <ol className="steps">
-            {STEPS.map((s, i) => (
-              <li key={s.id} className={i < stepIndex || status === "done" ? "done" : i === stepIndex && status === "running" ? "active" : i === stepIndex && status === "error" ? "failed" : ""}>
-                <span className="dot" />
-                <div>
-                  <strong>{s.label}</strong>
-                  {i === stepIndex && status !== "done" && step && <small>{step.detail}</small>}
-                  {i === stepIndex && status === "running" && step?.ratio !== undefined && (
-                    <div className="bar">
-                      <i style={{ width: `${Math.round(step.ratio * 100)}%` }} />
-                    </div>
-                  )}
-                </div>
-              </li>
-            ))}
-          </ol>
-          {queries.length > 0 && (
-            <div className="queries">
-              {queries.map(group => (
-                <div key={group.label}>
-                  <span>{queries.length > 1 ? `${group.label}${group.weight !== 1 ? ` ×${group.weight}` : ""}` : "검색어"}</span>
-                  {group.queries.map(q => (
-                    <em key={q}>{q}</em>
-                  ))}
-                </div>
-              ))}
-            </div>
-          )}
-          {error && <p className={`error ${error.startsWith("생성 불가") ? "blocked" : ""}`}>{error.startsWith("생성 불가") ? `🚫 ${error}` : error}</p>}
+          ))}
         </section>
 
-        <section className="panel stage" ref={stageRef}>
-          <div className="screen" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(72vh * ${width / height}))` }}>
-            <canvas ref={canvasRef} width={width} height={height} hidden={Boolean(output)} />
-            {output && <video src={output.url} controls autoPlay loop playsInline />}
-            {status === "idle" && !output && (
-              <div className="placeholder">
-                <b>▶</b>
-                <p>주제를 입력하고 에딧 만들기를 누르면 여기서 편집 과정이 재생돼요.</p>
+        <div className="columns">
+          <section className="card compose">
+            <div className="card-head">
+              <span className="mini-ring">
+                <img src="./favicon.svg" alt="" />
+              </span>
+              <div>
+                <strong>새 에딧 만들기</strong>
+                <small>인물·주제를 입력하면 그 대상이 나오는 영상만 골라 편집해요</small>
+              </div>
+            </div>
+
+            <label className="field">
+              <span>주제</span>
+              <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="예: 손흥민, 3:케인:, 토트넘" maxLength={200} onKeyDown={e => e.key === "Enter" && start()} />
+              <small className="hint">
+                쉼표로 여러 주제를 섞을 수 있어요 · <code>3:케인:</code>은 3배 비중
+              </small>
+            </label>
+
+            <label className="field">
+              <span>특징 · 분위기</span>
+              <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
+            </label>
+
+            <div className="style-preview" aria-live="polite">
+              <strong>{preview.label}</strong>
+              <span>{musicFile ? "BPM 자동" : `${preview.bpm} BPM`}</span>
+              <span>{GRADE_LABEL[preview.grade]}</span>
+              {[...preview.effects].map(effect => (
+                <span key={effect}>{EFFECT_LABEL[effect]}</span>
+              ))}
+            </div>
+
+            <div className="row">
+              <div className="field">
+                <span>길이</span>
+                <Segmented options={[15, 30, 45, 60]} value={seconds} onChange={setSeconds} format={v => `${v}초`} />
+              </div>
+              <div className="field">
+                <span>화면 비율</span>
+                <Segmented options={["9:16", "16:9", "1:1"] as Aspect[]} value={aspect} onChange={setAspect} />
+              </div>
+            </div>
+
+            <div className="row">
+              <label className="field">
+                <span>영상 수 · {sourceCount}개</span>
+                <input type="range" min={2} max={LIMITS.maxSources} value={sourceCount} onChange={e => setSourceCount(Number(e.target.value))} style={{ "--fill": `${((sourceCount - 2) / (LIMITS.maxSources - 2)) * 100}%` } as CSSProperties} />
+              </label>
+              <label className="field">
+                <span>배경음악</span>
+                <div className="file">
+                  <input type="file" accept="audio/*" onChange={e => setMusicFile(e.target.files?.[0] ?? null)} />
+                  <small>{musicFile ? musicFile.name : "비워 두면 자동 작곡"}</small>
+                </div>
+              </label>
+            </div>
+
+            <div className="field">
+              <span>영상 라이선스</span>
+              <Segmented options={["any", "reusable"] as LicenseMode[]} value={licenseMode} onChange={setLicenseMode} format={mode => (mode === "any" ? "모든 공개 영상" : "재사용 가능만")} />
+              <small className="hint">
+                {licenseMode === "any"
+                  ? `${isMobile ? "Reddit" : "YouTube·Reddit"} 위주로 찾아요. 공개적으로 올리려면 원작자 허락이 필요할 수 있어요.`
+                  : "Public domain · CC0 · CC BY · CC BY-SA 영상만 써서 자유롭게 공유할 수 있어요."}
+              </small>
+            </div>
+
+            {licenseMode === "any" && isMobile && !helper.ytDlp && (
+              <div className="helper">
+                <b>휴대폰 모드</b> Reddit·Wikimedia Commons·Internet Archive에서 찾아요. YouTube는 PC에서 로컬 도우미를 켰을 때만 쓸 수 있어요.
               </div>
             )}
-          </div>
-          {output && (
-            <div className="actions">
-              {canShareFile(output.file) ? (
-                <button type="button" className="primary" onClick={share}>
-                  공유 · 사진에 저장
-                </button>
-              ) : (
-                <a className="primary" href={output.url} download={output.file.name}>
-                  영상 저장 (.{output.ext})
-                </a>
-              )}
-              <button type="button" className="ghost" onClick={downloadPlan}>
-                편집 계획 JSON
+
+            {licenseMode === "any" && !isMobile && (
+              <div className={`helper ${helper.ytDlp ? "on" : ""}`}>
+                {helper.ytDlp ? (
+                  <>
+                    <b>● YouTube 연결됨</b> 로컬 도우미(yt-dlp {helper.ytDlp})로 YouTube·Reddit 영상을 받아요.
+                  </>
+                ) : helper.base ? (
+                  <>
+                    <b>● 도우미에 yt-dlp가 없어요</b> yt-dlp를 설치한 뒤 도우미를 다시 켜 주세요.
+                  </>
+                ) : (
+                  <>
+                    <b>YouTube 꺼짐</b> 내 컴퓨터에서 로컬 도우미(<code>pnpm helper</code>)를 켜면 YouTube 영상도 써요.{" "}
+                    <a href="https://github.com/jdjdjehejehejd-bot/editmatker#youtube-로컬-도우미-pc-전용" target="_blank" rel="noreferrer">
+                      방법 보기
+                    </a>
+                    <button type="button" className="chip connect" onClick={connectHelper} disabled={checkingHelper}>
+                      {checkingHelper ? "확인 중…" : "YouTube 연결"}
+                    </button>
+                    {helperMissing && <em className="missing">도우미를 찾지 못했어요. 터미널에서 실행 중인지 확인하세요.</em>}
+                  </>
+                )}
+              </div>
+            )}
+
+            {blockedInput && <p className="error blocked">🚫 {blockedInput}</p>}
+
+            {status === "running" ? (
+              <button className="primary" type="button" onClick={stop}>
+                중단하기
+              </button>
+            ) : (
+              <button className="primary" type="button" onClick={start} disabled={!topic.trim() || Boolean(blockedInput)}>
+                {blockedInput ? "생성 불가" : status === "done" ? "다시 만들기" : "에딧 만들기"}
+              </button>
+            )}
+          </section>
+
+          <article className="card reel" ref={stageRef}>
+            <header className="reel-head">
+              <span className={`mini-ring ${status === "running" ? "spin" : ""}`}>
+                <img src="./favicon.svg" alt="" />
+              </span>
+              <div>
+                <strong>{reelTitle}</strong>
+                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${preview.label} · 자동 작곡 음악`}</small>
+              </div>
+              <span className="more" aria-hidden>
+                <MoreIcon />
+              </span>
+            </header>
+
+            <div className="reel-media">
+              <div className="screen" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(70vh * ${width / height}))` }}>
+                <div className="story-bars" aria-label="진행 단계">
+                  {STEPS.map((s, i) => (
+                    <i key={s.id} className={barState(i)} title={s.label}>
+                      <b style={i === stepIndex && status === "running" && step?.ratio !== undefined ? { width: `${Math.round(step.ratio * 100)}%` } : undefined} />
+                    </i>
+                  ))}
+                </div>
+                <canvas ref={canvasRef} width={width} height={height} hidden={Boolean(output)} />
+                {output && <video src={output.url} controls autoPlay loop playsInline />}
+                {status === "idle" && !output && (
+                  <div className="placeholder">
+                    <b>
+                      <PlayIcon />
+                    </b>
+                    <p>주제를 입력하고 에딧 만들기를 누르면 여기서 편집 과정이 재생돼요</p>
+                  </div>
+                )}
+                {statusText && status === "running" && <div className="reel-status">{statusText}</div>}
+              </div>
+            </div>
+
+            <div className="reel-actions">
+              <button type="button" className={`icon ${liked ? "liked" : ""}`} aria-label="좋아요" onClick={() => setLiked(v => !v)}>
+                <HeartIcon filled={liked} />
+              </button>
+              <button type="button" className="icon" aria-label="사용한 영상 보기" onClick={() => sourcesRef.current?.scrollIntoView({ behavior: "smooth" })} disabled={!loaded.length}>
+                <CommentIcon />
+              </button>
+              <button type="button" className="icon" aria-label="공유·저장" onClick={output ? (canShareFile(output.file) ? share : () => downloadVideo()) : undefined} disabled={!output}>
+                <SendIcon />
+              </button>
+              <span className="spacer" />
+              <button type="button" className="icon" aria-label="편집 계획 저장" onClick={downloadPlan} disabled={!result}>
+                <BookmarkIcon />
               </button>
             </div>
-          )}
 
-          {result && (
-            <div className="timeline" aria-label="타임라인">
-              {result.plan.segments.map((seg, i) => (
-                <i
-                  key={i}
-                  title={`${seg.section} · ${seg.duration.toFixed(2)}초${seg.rate < 1 ? " · 슬로모션" : ""}`}
-                  style={{ flexGrow: seg.duration, background: colorOf(seg.sourceId), opacity: seg.section === "drop" ? 1 : 0.55 }}
-                />
+            <div className="reel-body">
+              {result && (
+                <div className="timeline" aria-label="타임라인">
+                  {result.plan.segments.map((seg, i) => (
+                    <i
+                      key={i}
+                      title={`${seg.section} · ${seg.duration.toFixed(2)}초${seg.rate < 1 ? " · 슬로모션" : ""}`}
+                      style={{ flexGrow: seg.duration, background: colorOf(seg.sourceId), opacity: seg.section === "drop" ? 1 : 0.5 }}
+                    />
+                  ))}
+                </div>
+              )}
+              <p className="caption">
+                <strong>editmatker</strong> {reelTitle} 에딧 <span className="tags">{hashtags}</span>
+              </p>
+              {statusText && status !== "running" && <p className="status-line">{statusText}</p>}
+              {queries.length > 0 && (
+                <div className="queries">
+                  {queries.map(group => (
+                    <div key={group.label}>
+                      <span>{queries.length > 1 ? `${group.label}${group.weight !== 1 ? ` ×${group.weight}` : ""}` : "검색어"}</span>
+                      {group.queries.map(q => (
+                        <em key={q}>{q}</em>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {error && <p className={`error ${isBlockedError ? "blocked" : ""}`}>{isBlockedError ? `🚫 ${error}` : error}</p>}
+              {output && (
+                <div className="actions">
+                  {canShareFile(output.file) ? (
+                    <button type="button" className="primary" onClick={share}>
+                      공유 · 사진에 저장
+                    </button>
+                  ) : (
+                    <button type="button" className="primary" onClick={downloadVideo}>
+                      영상 저장 (.{output.ext})
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+          </article>
+        </div>
+
+        {(loaded.length > 0 || candidates.length > 0) && (
+          <section className="sources" ref={sourcesRef}>
+            <div className="sources-head">
+              <strong>사용한 영상</strong>
+              <small>
+                후보 {candidates.length}개 중 {loaded.length}개 · 그래프는 장면 점수, 칠해진 구간이 뽑힌 하이라이트
+              </small>
+            </div>
+            <div className="grid">
+              {loaded.map(source => (
+                <a key={source.id} className="tile" href={source.pageUrl} target="_blank" rel="noreferrer" title={source.title}>
+                  {source.poster ? <img src={source.poster} alt="" loading="lazy" onError={e => (e.currentTarget.style.visibility = "hidden")} /> : <span className="poster" />}
+                  <span className="tile-badge">{source.provider}</span>
+                  <span className="tile-info">
+                    <b>
+                      <i style={{ background: colorOf(source.id) }} />
+                      {source.title}
+                    </b>
+                    <small>
+                      {loaded.some(other => other.topicLabel !== source.topicLabel) && <em className="topic-tag">{source.topicLabel} · </em>}
+                      {source.author} · {source.license}
+                      {!source.reusable && " · 재사용 허가 확인 필요"}
+                    </small>
+                    <ScoreGraph source={source} color={colorOf(source.id)} />
+                  </span>
+                </a>
               ))}
             </div>
-          )}
-          {result && (
-            <p className="meta">
-              {result.plan.segments.length}컷 · {result.plan.bpm} BPM · 드롭 {result.plan.dropAt.toFixed(1)}초 · {GRADE_LABEL[result.style.grade]}
-            </p>
-          )}
-        </section>
+            {skipped.length > 0 && (
+              <details className="skipped">
+                <summary>건너뛴 영상 {skipped.length}개</summary>
+                <ul>
+                  {skipped.map((s, i) => (
+                    <li key={i}>
+                      {s.title} — {s.reason}
+                    </li>
+                  ))}
+                </ul>
+              </details>
+            )}
+          </section>
+        )}
+
+        <footer className="notes">
+          <p>
+            영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 제목·설명에 주제 이름이 나오는 영상만 씁니다. 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>은 재사용 허가가 없는 영상도 쓰므로 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 자유롭게 공유하려면 <b>재사용 가능만</b>을 고르세요.
+          </p>
+          <p>검열: 입력·검색어·영상 제목·채널·분류에서 부적절한 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사합니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
+          <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다.</p>
+        </footer>
       </main>
-
-      {(loaded.length > 0 || candidates.length > 0) && (
-        <section className="sources">
-          <h2>
-            사용한 영상 <small>{candidates.length}개 후보 중 {loaded.length}개 · 그래프는 장면 점수, 칠해진 구간이 뽑힌 하이라이트</small>
-          </h2>
-          <div className="grid">
-            {loaded.map(source => (
-              <article key={source.id} className="card">
-                {source.poster ? <img src={source.poster} alt="" loading="lazy" onError={e => (e.currentTarget.style.visibility = "hidden")} /> : <div className="poster" />}
-                <div className="card-body">
-                  <a href={source.pageUrl} target="_blank" rel="noreferrer" className="title">
-                    <i style={{ background: colorOf(source.id) }} />
-                    {source.title}
-                  </a>
-                  {loaded.some(other => other.topicLabel !== source.topicLabel) && <small className="topic-tag">{source.topicLabel}</small>}
-                  <small>
-                    {source.author} ·{" "}
-                    {source.licenseUrl ? (
-                      <a href={source.licenseUrl} target="_blank" rel="noreferrer">
-                        {source.license}
-                      </a>
-                    ) : (
-                      source.license
-                    )}{" "}
-                    · {source.provider}
-                    {!source.reusable && <em className="badge">재사용 허가 확인 필요</em>}
-                  </small>
-                  <ScoreGraph source={source} color={colorOf(source.id)} />
-                </div>
-              </article>
-            ))}
-          </div>
-          {skipped.length > 0 && (
-            <details className="skipped">
-              <summary>건너뛴 영상 {skipped.length}개</summary>
-              <ul>
-                {skipped.map((s, i) => (
-                  <li key={i}>
-                    {s.title} — {s.reason}
-                  </li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </section>
-      )}
-
-      <footer className="notes">
-        <p>
-          영상은 YouTube·Reddit(모든 공개 영상 모드)과 Wikimedia Commons·Internet Archive에서 가져오며, 영상 끝에 출처 크레딧이 자동으로 들어갑니다. <b>모든 공개 영상</b>을 고르면 비영리(NC)·변경금지(ND)이거나 라이선스가 표시되지 않은 영상도 쓰므로, 결과물을 공개적으로 올리기 전에 원작자 허락이 필요한지 확인하세요. 결과물을 자유롭게 공유하려면 <b>재사용 가능만</b>(Public domain · CC0 · CC BY · CC BY-SA)을 고르세요. CC BY-SA 자료가 포함되면 결과물도 같은 조건으로 공유해야 합니다.
-        </p>
-        <p>검열: 입력·검색어·영상 제목·채널·분류에서 성적·욕설·혐오·잔혹·약물 관련 단어를 걸러내고, 영상마다 장면 10개를 기기 안의 NSFW.js 모델로 검사해 선정적인 영상을 뺍니다. 자동 검사라 완벽하지 않을 수 있어요.</p>
-        <p>모든 처리는 브라우저 안에서 이루어지며 영상이 서버로 업로드되지 않습니다. 최신 Chrome · Edge · Firefox 데스크톱을 권장합니다.</p>
-      </footer>
     </div>
   );
 }
+
+function Icon({ children, size = 24 }: { children: ReactNode; size?: number }) {
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.9} strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      {children}
+    </svg>
+  );
+}
+const HeartIcon = ({ filled }: { filled?: boolean }) => (
+  <Icon>
+    <path d="M12 20.5s-7.5-4.6-9.3-9.2C1.4 7.8 3.6 4.5 7 4.5c2 0 3.6 1.1 5 3 1.4-1.9 3-3 5-3 3.4 0 5.6 3.3 4.3 6.8-1.8 4.6-9.3 9.2-9.3 9.2z" fill={filled ? "currentColor" : "none"} />
+  </Icon>
+);
+const CommentIcon = () => (
+  <Icon>
+    <path d="M20.7 12a8.7 8.7 0 0 1-12.9 7.6L3.3 21l1.4-4.5A8.7 8.7 0 1 1 20.7 12z" />
+  </Icon>
+);
+const SendIcon = () => (
+  <Icon>
+    <path d="M21.5 3 10.2 14.3M21.5 3l-7 18-4.3-6.7L3.5 10 21.5 3z" />
+  </Icon>
+);
+const BookmarkIcon = () => (
+  <Icon>
+    <path d="M19 21l-7-5-7 5V4.5A1.5 1.5 0 0 1 6.5 3h11A1.5 1.5 0 0 1 19 4.5V21z" />
+  </Icon>
+);
+const MoreIcon = () => (
+  <Icon>
+    <circle cx="5" cy="12" r="1" fill="currentColor" />
+    <circle cx="12" cy="12" r="1" fill="currentColor" />
+    <circle cx="19" cy="12" r="1" fill="currentColor" />
+  </Icon>
+);
+const PlayIcon = () => (
+  <svg width="26" height="26" viewBox="0 0 24 24" aria-hidden>
+    <path d="M8 5.5v13l11-6.5-11-6.5z" fill="currentColor" />
+  </svg>
+);
+const ShieldIcon = () => (
+  <Icon size={15}>
+    <path d="M12 3 4.5 6v5.5c0 4.6 3.2 8.4 7.5 9.5 4.3-1.1 7.5-4.9 7.5-9.5V6L12 3z" />
+    <path d="m8.8 12 2.2 2.2 4.2-4.4" />
+  </Icon>
+);
 
 function Segmented<T extends string | number>({ options, value, onChange, format }: { options: T[]; value: T; onChange: (value: T) => void; format?: (value: T) => string }) {
   return (

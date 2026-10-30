@@ -188,8 +188,54 @@ export function expandQueries(topic: TopicInfo, hints: string[], max = 7): Searc
   if (english) push([english, ...hints].join(" "), 1, "name");
   if (english && hints.length) push(english, 0.95, "name");
   for (const alias of (topic.aliases ?? []).slice(0, 2)) push(alias, 0.85, "alias");
-  for (const related of (topic.related ?? []).slice(0, 3)) push(related, 0.6, "related");
+  // 관련 주제는 단독으로 검색하면 엉뚱한 영상이 나오므로 항상 주제 이름과 함께 검색합니다.
+  const anchor = english ?? korean ?? topic.query;
+  for (const related of (topic.related ?? []).slice(0, 3)) push(`${anchor} ${related}`, 0.6, "related");
   return list.slice(0, max);
+}
+
+// ---------------------------------------------------------------------------
+// 관련성 판정: 영상 제목·설명에 주제 이름이 실제로 나오는지
+
+/** 소문자, 악센트 제거(é → e), 글자·숫자만 남기기 */
+function fold(text: string) {
+  return text.normalize("NFKD").replace(/\p{M}/gu, "").toLowerCase();
+}
+
+function compactFold(text: string) {
+  return fold(text).replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function words(text: string) {
+  return fold(text).split(/[^\p{L}\p{N}]+/u).filter(Boolean);
+}
+
+/**
+ * 영상 정보(제목·태그·채널)에 주제 이름이 나오면 true.
+ * - 한국어 이름: 띄어쓰기를 무시하고 포함 여부 ("손 흥민" → 손흥민)
+ * - 영어 이름: 기호를 무시하고 포함 ("Son Heungmin", "SON HEUNG-MIN"), 또는 이름의 단어가 순서와 상관없이 모두 나옴 ("Heung-min Son")
+ * - 짧은 영어 이름(BTS, IU)은 다른 단어 속에 들어간 경우를 빼려고 단어 단위로만 비교
+ */
+export function matchesTopic(text: string, topic: TopicInfo): boolean {
+  const haystack = compactFold(text);
+  const tokens = new Set(words(text));
+  for (const name of topicNames(topic)) {
+    const key = compactFold(name);
+    if (!key) continue;
+    const latin = !HANGUL.test(name);
+    if (!latin) {
+      if (key.length >= 2 && haystack.includes(key)) return true;
+      continue;
+    }
+    const parts = words(name).filter(part => part.length >= 2);
+    if (key.length < 4) {
+      if (tokens.has(key) || (parts.length > 1 && parts.every(part => tokens.has(part)))) return true;
+      continue;
+    }
+    if (haystack.includes(key)) return true;
+    if (parts.length > 1 && parts.every(part => tokens.has(part))) return true;
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
