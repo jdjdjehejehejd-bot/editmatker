@@ -64,26 +64,70 @@ function escapeRegExp(text: string) {
 }
 
 const SAFE_NORMALIZED = SAFE_PHRASES.map(p => p.normalize("NFKC"));
-const KO_WORDS = RULES.flatMap(rule => (rule.ko ?? []).map(word => ({ word, category: rule.category, key: compact(word.normalize("NFKC").toLowerCase()) })));
 
-const EN_PATTERNS = RULES.flatMap(rule =>
-  (rule.en ?? []).map(word => ({ word, category: rule.category, re: new RegExp(`(^|[^a-z])${escapeRegExp(word).replace(/ /g, "\\s*")}($|[^a-z])`) }))
-);
+/** 검열 옵션. 특징·분위기에 NSFW를 적으면 성적 콘텐츠 검사만 끕니다. */
+export interface ModerationOptions {
+  nsfw?: boolean;
+}
+
+/** NSFW 모드를 켜는 표시 — 띄어쓰기·기호(N.S.F.W, n s f w)도 같은 말로 봅니다. */
+const NSFW_MARKERS = ["nsfw", "무검열", "노검열", "검열해제", "검열없", "19금"];
+const NSFW_LOOSE = /uncensored|no\s*censor|19\+/i;
+
+/** 특징·분위기 문장에 NSFW 표시가 있는지 */
+export function isNsfwRequested(features: string | null | undefined): boolean {
+  const text = (features ?? "").normalize("NFKC");
+  if (!text.trim()) return false;
+  if (NSFW_LOOSE.test(text)) return true;
+  const squashed = compact(text.toLowerCase());
+  return NSFW_MARKERS.some(marker => squashed.includes(marker));
+}
+
+interface KoRule {
+  word: string;
+  category: BlockCategory;
+  key: string;
+}
+
+interface EnRule {
+  word: string;
+  category: BlockCategory;
+  re: RegExp;
+}
+
+function buildKoRules(rules: Rule[]): KoRule[] {
+  return rules.flatMap(rule => (rule.ko ?? []).map(word => ({ word, category: rule.category, key: compact(word.normalize("NFKC").toLowerCase()) })));
+}
+
+function buildEnRules(rules: Rule[]): EnRule[] {
+  return rules.flatMap(rule =>
+    (rule.en ?? []).map(word => ({ word, category: rule.category, re: new RegExp(`(^|[^a-z])${escapeRegExp(word).replace(/ /g, "\\s*")}($|[^a-z])`) }))
+  );
+}
+
+const KO_WORDS = buildKoRules(RULES);
+const EN_PATTERNS = buildEnRules(RULES);
+
+/** NSFW 모드에서 쓰는 목록 — 성적 카테고리만 빠지고, 아동·비동의·잔혹·약물은 그대로 남습니다. */
+const KO_WORDS_STRICT = buildKoRules(RULES.filter(rule => rule.category !== "성적"));
+const EN_PATTERNS_STRICT = buildEnRules(RULES.filter(rule => rule.category !== "성적"));
 
 export interface BlockedMatch {
   word: string;
   category: BlockCategory;
 }
 
-/** 문장에 들어 있는 금지어를 찾습니다. */
-export function findBlockedWords(text: string): BlockedMatch[] {
+/** 문장에 들어 있는 금지어를 찾습니다. options.nsfw면 성적 단어는 검사하지 않습니다. */
+export function findBlockedWords(text: string, options: ModerationOptions = {}): BlockedMatch[] {
   if (!text) return [];
+  const koWords = options.nsfw ? KO_WORDS_STRICT : KO_WORDS;
+  const enPatterns = options.nsfw ? EN_PATTERNS_STRICT : EN_PATTERNS;
   const base = normalize(text);
   const variants = [base, deleet(base)];
   const compacts = variants.map(compact);
   const found = new Map<string, BlockedMatch>();
-  for (const { word, category, key } of KO_WORDS) if (compacts.some(c => c.includes(key))) found.set(word, { word, category });
-  for (const { word, category, re } of EN_PATTERNS) {
+  for (const { word, category, key } of koWords) if (compacts.some(c => c.includes(key))) found.set(word, { word, category });
+  for (const { word, category, re } of enPatterns) {
     // 띄어 쓴 변형(p o r n)은 4글자 이상 단어만 붙여서 검사합니다(짧은 단어는 오탐이 많음).
     const key = word.replace(/ /g, "");
     const spaced = key.length >= 4 && compacts.some(c => new RegExp(`(^|[^a-z])${escapeRegExp(key)}($|[^a-z])`).test(c));
@@ -93,12 +137,21 @@ export function findBlockedWords(text: string): BlockedMatch[] {
 }
 
 export function isTextAllowed(...texts: (string | null | undefined)[]) {
-  return texts.every(text => !findBlockedWords(text ?? "").length);
+  return isTextAllowedWith({}, ...texts);
 }
 
-/** 사용자 입력을 검사해 막아야 하면 안내 문구를, 괜찮으면 null을 돌려줍니다. */
+/** 검열 옵션을 적용해 검사합니다. */
+export function isTextAllowedWith(options: ModerationOptions, ...texts: (string | null | undefined)[]) {
+  return texts.every(text => !findBlockedWords(text ?? "", options).length);
+}
+
+/**
+ * 사용자 입력을 검사해 막아야 하면 안내 문구를, 괜찮으면 null을 돌려줍니다.
+ * 특징·분위기에 NSFW를 적었으면 성적 콘텐츠 검사만 건너뛰고 나머지는 그대로 검사합니다.
+ */
 export function checkUserInput(topic: string, features: string): string | null {
-  const hits = [...findBlockedWords(topic), ...findBlockedWords(features)];
+  const options: ModerationOptions = { nsfw: isNsfwRequested(features) };
+  const hits = [...findBlockedWords(topic, options), ...findBlockedWords(features, options)];
   if (!hits.length) return null;
   const categories = [...new Set(hits.map(h => h.category))].join(", ");
   return `생성 불가 — 부적절한 단어(${categories})가 들어 있어요. 해당 단어를 빼고 다시 입력해 주세요.`;
@@ -124,8 +177,8 @@ export function shouldBlockTopic(censored: number, total: number): boolean {
 }
 
 /** 해석된 주제(영어 이름, Wikidata 설명)에 금지어가 있는지 — 예: 설명이 "pornographic actress"인 인물 */
-export function isTopicAllowed(info: { query: string; label: string; englishLabel: string | null; description: string | null }) {
-  return isTextAllowed(info.query, info.label, info.englishLabel, info.description);
+export function isTopicAllowed(info: { query: string; label: string; englishLabel: string | null; description: string | null }, options: ModerationOptions = {}) {
+  return isTextAllowedWith(options, info.query, info.label, info.englishLabel, info.description);
 }
 
 // ---------------------------------------------------------------------------
@@ -166,13 +219,16 @@ function loadClassifier(): Promise<Classifier> {
   return classifier;
 }
 
-/** 미리 불러 두기 (영상 받는 동안 모델도 받아 두면 기다림이 줄어듭니다) */
-export function preloadClassifier() {
+/** 미리 불러 두기 (영상 받는 동안 모델도 받아 두면 기다림이 줄어듭니다). NSFW 모드에서는 모델을 받지 않습니다. */
+export function preloadClassifier(options: ModerationOptions = {}) {
+  if (options.nsfw) return;
   void loadClassifier().catch(() => undefined);
 }
 
 /** 영상 프레임들을 검사합니다. 검사 자체가 실패하면 안전하게 차단합니다. */
-export async function screenFrames(frames: HTMLCanvasElement[]): Promise<{ blocked: boolean; reason: string | null }> {
+export async function screenFrames(frames: HTMLCanvasElement[], options: ModerationOptions = {}): Promise<{ blocked: boolean; reason: string | null }> {
+  // NSFW 모드면 장면 검사(모델 다운로드 포함)를 하지 않습니다.
+  if (options.nsfw) return { blocked: false, reason: null };
   if (!frames.length) return { blocked: false, reason: null };
   let model: Classifier;
   try {

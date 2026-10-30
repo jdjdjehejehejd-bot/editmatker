@@ -79,6 +79,7 @@ a { color: inherit; }
 .field input:focus, .field textarea:focus { background: #fff; border-color: #a8a8a8; }
 .field code { background: var(--soft); border-radius: 4px; padding: 0 4px; font-size: 11px; color: var(--ink-2); }
 .hint { color: var(--muted); font-size: 11.5px; line-height: 1.5; }
+.shield.off { color: var(--ink-2); background: var(--line); }
 
 input[type="range"] { -webkit-appearance: none; appearance: none; width: 100%; height: 22px; background: transparent; cursor: pointer; --fill: 50%; }
 input[type="range"]::-webkit-slider-runnable-track { height: 4px; border-radius: 4px; background: linear-gradient(90deg, var(--ink) var(--fill), var(--line) var(--fill)); }

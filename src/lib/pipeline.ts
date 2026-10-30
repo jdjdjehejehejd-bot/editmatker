@@ -2,7 +2,7 @@
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
 import { LIMITS } from "./device";
-import { checkUserInput, GenerationBlockedError, isTextAllowed, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
+import { checkUserInput, GenerationBlockedError, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
@@ -70,6 +70,8 @@ export interface PipelineEvents {
 const MAX_TOTAL_SOURCES = 8;
 
 export async function runPipeline(input: PipelineInput, events: PipelineEvents, signal: AbortSignal): Promise<PipelineResult> {
+  // 특징·분위기에 NSFW를 적었으면 성적 콘텐츠 검열만 끕니다(다른 카테고리는 그대로).
+  const policy = { nsfw: isNsfwRequested(input.features) };
   // 검열: 부적절한 단어가 있으면 시작하지 않습니다.
   const blocked = checkUserInput(input.topic, input.features);
   if (blocked) throw new GenerationBlockedError(blocked);
@@ -78,9 +80,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   if (!specs.length) throw new Error("주제를 입력해 주세요.");
 
   events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
-  const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal)));
+  const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
   // 검열: 주제가 가리키는 대상(영어 이름, 설명)이 부적절하면 생성하지 않습니다.
-  const badTopic = infos.find(info => !isTopicAllowed(info));
+  const badTopic = infos.find(info => !isTopicAllowed(info, policy));
   if (badTopic) throw new GenerationBlockedError(`생성 불가 — 주제 "${badTopic.query}"는 검열 대상이에요.`);
 
   const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
@@ -98,7 +100,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   let irrelevant = 0;
   const topics: TopicResult[] = infos.map((info, i) => {
     // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
-    const flagged = found[i].sources.filter(source => source.nsfw || !isTextAllowed(source.title, source.author, source.tags));
+    // NSFW 모드에서는 성적 단어와 성인물 표시를 걸러내지 않습니다.
+    const flagged = found[i].sources.filter(source => (!policy.nsfw && source.nsfw) || !isTextAllowedWith(policy, source.title, source.author, source.tags));
     // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
     if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
       const percent = Math.round((flagged.length / found[i].sources.length) * 100);
@@ -136,8 +139,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const failures: string[] = topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`);
   if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
   if (irrelevant) failures.push(`관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외`);
-  // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다.
-  preloadClassifier();
+  // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다(NSFW 모드에서는 받지 않음).
+  preloadClassifier(policy);
 
   // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다.
   const userMusic = input.musicFile ? await prepareUserMusic(input.musicFile, input.seconds) : null;
@@ -170,9 +173,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         try {
           events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
           const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
-          // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다.
-          events.step("analyze", `${candidate.title} 장면 검열 중`);
-          const verdict = await screenFrames(analysis.keyframes);
+          // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
+          if (!policy.nsfw) events.step("analyze", `${candidate.title} 장면 검열 중`);
+          const verdict = await screenFrames(analysis.keyframes, policy);
           analysis.keyframes = [];
           const tally = screening.get(topic)!;
           tally.checked++;

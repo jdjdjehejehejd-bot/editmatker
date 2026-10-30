@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
-import { checkUserInput, findBlockedWords, isTextAllowed, isTopicAllowed, judgeFrames, shouldBlockTopic } from "./moderation";
+import { checkUserInput, findBlockedWords, isNsfwRequested, isTextAllowed, isTopicAllowed, judgeFrames, screenFrames, shouldBlockTopic } from "./moderation";
 
 const words = (text: string) => findBlockedWords(text).map(m => m.word);
+const wordsNsfw = (text: string) => findBlockedWords(text, { nsfw: true }).map(m => m.word);
 
 describe("금지어 검사", () => {
   it("성적·욕설·혐오·잔혹 단어를 잡는다", () => {
@@ -53,6 +54,49 @@ describe("장면 판정", () => {
   });
   it("평범한 장면은 통과", () => {
     expect(judgeFrames([safe, safe, safe])).toEqual({ blocked: false, reason: null });
+  });
+});
+
+describe("NSFW 모드", () => {
+  it("특징·분위기에 NSFW를 적으면 켜진다", () => {
+    for (const on of ["NSFW", "nsfw", "NSFW 시네마틱", "N.S.F.W", "n s f w", "무검열", "19+", "uncensored", "no censor"]) expect(isNsfwRequested(on), on).toBe(true);
+  });
+
+  it("표시가 없으면 꺼진 상태다", () => {
+    for (const off of ["", "   ", "웅장하고 시네마틱하게", "빠른 컷, 네온, 120bpm", null, undefined]) expect(isNsfwRequested(off), String(off)).toBe(false);
+  });
+
+  it("성적 단어와 성인물 표시는 통과시킨다", () => {
+    expect(wordsNsfw("야동 모음")).toEqual([]);
+    expect(wordsNsfw("best porn clips")).toEqual([]);
+    expect(wordsNsfw("N.S.F.W")).toEqual([]);
+    expect(checkUserInput("고양이", "NSFW")).toBeNull();
+    expect(checkUserInput("성인배우", "nsfw, 시네마틱")).toBeNull();
+  });
+
+  it("표시가 없으면 성적 단어는 그대로 막는다", () => {
+    expect(words("야동 모음")).toContain("야동");
+    expect(checkUserInput("고양이", "야동")).toMatch(/성적/);
+  });
+
+  it("NSFW여도 욕설·잔혹·약물과 아동·비동의 관련은 막는다", () => {
+    expect(wordsNsfw("씨발")).toContain("씨발");
+    expect(wordsNsfw("beheading video")).toContain("beheading");
+    expect(wordsNsfw("rape")).toContain("rape");
+    expect(wordsNsfw("아동학대")).toContain("아동학대");
+    expect(wordsNsfw("pedophile")).toContain("pedophile");
+    expect(wordsNsfw("마약")).toContain("마약");
+    expect(checkUserInput("고양이", "nsfw, 씨발")).toMatch(/욕설·혐오/);
+  });
+
+  it("주제 설명이 성인물이어도 NSFW면 통과한다", () => {
+    const info = { query: "이름", label: "이름", englishLabel: "Some Name", description: "Japanese pornographic actress" };
+    expect(isTopicAllowed(info)).toBe(false);
+    expect(isTopicAllowed(info, { nsfw: true })).toBe(true);
+  });
+
+  it("장면 검사는 NSFW 모드에서 모델 없이 통과한다", async () => {
+    await expect(screenFrames([{} as HTMLCanvasElement], { nsfw: true })).resolves.toEqual({ blocked: false, reason: null });
   });
 });
 

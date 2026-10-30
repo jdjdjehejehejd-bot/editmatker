@@ -1,5 +1,7 @@
 // 사용자가 자유롭게 적은 "특징" 문장을 편집 스타일 값으로 바꿉니다.
 
+import { isNsfwRequested } from "./moderation";
+
 export type Mood = "hype" | "cinematic" | "emotional" | "retro";
 export type Grade = "natural" | "warm" | "cool" | "mono" | "vivid" | "teal-orange";
 export type Effect = "flash" | "shake" | "zoom" | "glitch" | "slowmo" | "grain" | "letterbox" | "pulse";
@@ -127,6 +129,8 @@ export function parseStyle(features: string): EditStyle {
 
   const searchHints = [...new Set(HINT_DICTIONARY.filter(([re]) => re.test(text)).map(([, hint]) => hint))];
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
+    // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
+    if (isNsfwRequested(word)) continue;
     if (!Object.values(MOOD_KEYWORDS).some(re => re.test(word)) && searchHints.length < 4) searchHints.push(word.toLowerCase());
   }
 

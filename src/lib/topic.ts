@@ -2,7 +2,7 @@
 // Wikidata·Wikipedia(키 없이 CORS 허용)로 주제의 영어 이름, 다른 이름(별칭), 관련 주제를 찾아
 // 입력값 하나만이 아니라 여러 검색어로 영상을 찾게 합니다.
 
-import { isTextAllowed } from "./moderation";
+import { isTextAllowedWith, type ModerationOptions } from "./moderation";
 
 export interface TopicInfo {
   query: string;
@@ -130,7 +130,7 @@ async function similarArticles(enwikiTitle: string | null, signal?: AbortSignal)
   return (data?.query?.search ?? []).map((hit: any) => hit?.title).filter((title: unknown): title is string => typeof title === "string");
 }
 
-export async function resolveTopic(query: string, signal?: AbortSignal): Promise<TopicInfo> {
+export async function resolveTopic(query: string, signal?: AbortSignal, options: ModerationOptions = {}): Promise<TopicInfo> {
   const fallback: TopicInfo = { query, label: query, englishLabel: null, description: null, commonsCategory: null, wikidataVideos: [], aliases: [], related: [] };
   try {
     const id = await findEntityId(query, signal);
@@ -158,8 +158,8 @@ export async function resolveTopic(query: string, signal?: AbortSignal): Promise
       commonsCategory: claimValues("P373")[0] ?? null,
       wikidataVideos: claimValues("P10"),
       // 별칭·관련 주제에 금지어가 섞여 있으면 검색어로 쓰지 않습니다.
-      aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowed(alias)),
-      related: related.filter(item => isTextAllowed(item)),
+      aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowedWith(options, alias)),
+      related: related.filter(item => isTextAllowedWith(options, item)),
     };
   } catch (error) {
     if (signal?.aborted) throw error;
