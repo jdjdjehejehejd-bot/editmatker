@@ -27,11 +27,11 @@ export function isPersonEntity(entity: any): boolean {
   return instanceOf.includes("Q5") || Boolean(entity?.claims?.P106?.length) || (Boolean(entity?.claims?.P527?.length) && /group|band|그룹|밴드|duo|팀/i.test(`${entity?.descriptions?.en?.value ?? ""} ${entity?.descriptions?.ko?.value ?? ""}`));
 }
 
-const SPORTS_WORDS = /athlete|player|footballer|fighter|boxer|wrestler|martial art|\bmma\b|ufc|swimmer|sprinter|cyclist|gymnast|bodybuilder|skater|tennis|golfer|olympi|선수|격투|복서|레슬러|수영|육상|체조|보디빌|축구|야구|농구|배구|테니스|골프|올림픽/i;
+const SPORTS_WORDS = /athlete|player|footballer|fighter|boxer|boxing|wrestl|martial art|\bmma\b|ufc|kickbox|muay thai|judo|taekwondo|karate|jiu.?jitsu|swimm|sprinter|cyclist|gymnast|bodybuild|skater|tennis|golf|olympi|\bsports?\b|football|soccer|basketball|baseball|volleyball|hockey|cricket|rugby|handball|athletics|marathon|triathlon|surf|\bnba\b|\bnfl\b|\bmlb\b|\bfifa\b|premier league|champions league|\bleague\b|선수|격투|복싱|복서|레슬|주짓수|유도|태권도|씨름|수영|육상|체조|보디빌|축구|야구|농구|배구|하키|럭비|테니스|골프|마라톤|올림픽|월드컵|스포츠|리그/i;
 
 /** 문장에 선수·경기 관련 말이 있는지 (주제를 Wikidata에서 못 찾았을 때 특징·분위기 문장으로 보조 판단) */
 export function mentionsSports(text: string | null | undefined): boolean {
-  return SPORTS_WORDS.test(text ?? "") || /경기|시합|하이라이트|\bko\b|knockout|녹아웃|골|득점|스포츠|sports?/i.test(text ?? "");
+  return SPORTS_WORDS.test(text ?? "") || /경기|시합|하이라이트|\bko\b|knockout|녹아웃|골|득점|스포츠|sports?|world cup|highlights?|\bgoals?\b|\bmatch(es)?\b|\bfight\b|\bbout\b|\bknock ?out\b|\bsubmission\b|\btouchdown\b|\bdunk\b|\bhome run\b/i.test(text ?? "");
 }
 
 /** Wikidata의 종목(P641)·소속 팀(P54)이 있거나 설명에 선수·경기 관련 말이 있으면 스포츠 주제 */

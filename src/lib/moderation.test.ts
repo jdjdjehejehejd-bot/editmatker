@@ -62,8 +62,22 @@ describe("장면 판정", () => {
     const fight = Array.from({ length: 10 }, () => skin);
     expect(judgeFrames(fight, { sports: true }).blocked).toBe(false);
     expect(judgeFrames(fight).blocked).toBe(true);
-    expect(judgeFrames([safe, { porn: 0.95, hentai: 0, sexy: 0 }], { sports: true }).blocked).toBe(true);
+    expect(judgeFrames([safe, { porn: 0.98, hentai: 0, sexy: 0 }], { sports: true })).toMatchObject({ blocked: true, certain: true });
     expect(judgeFrames([{ porn: 0.7, hentai: 0, sexy: 0.2 }, { porn: 0.7, hentai: 0, sexy: 0.2 }], { sports: true }).blocked).toBe(false);
+  });
+  it("스포츠 영상은 몸싸움·맨살 오탐(0.9 한두 장면)으로 막지 않고, 여러 장면이면 그 영상만 뺀다", () => {
+    const grapple = { porn: 0.9, hentai: 0.02, sexy: 0.3 };
+    expect(judgeFrames([grapple, safe, safe, safe], { sports: true }).blocked).toBe(false);
+    expect(judgeFrames([grapple, grapple, safe, safe], { sports: true }).blocked).toBe(false);
+    // 일반 영상에서는 같은 장면 둘이면 막습니다.
+    expect(judgeFrames([grapple, grapple, safe, safe]).blocked).toBe(true);
+    // 스포츠에서 여러 장면이 걸려도 확실한 장면이 없으면 주제 전체 차단에는 세지 않습니다.
+    expect(judgeFrames([grapple, grapple, grapple], { sports: true })).toMatchObject({ blocked: true, certain: false });
+  });
+  it("선수 이름·직업 속 금지어 글자는 막지 않음", () => {
+    expect(isTextAllowed("펠라이니 헤딩골")).toBe(true);
+    expect(isTextAllowed("축구 애널리스트 분석")).toBe(true);
+    expect(isTextAllowed("펠라 영상")).toBe(false);
   });
   it("평범한 장면은 통과", () => {
     expect(judgeFrames([safe, safe, safe])).toEqual({ blocked: false, reason: null });
