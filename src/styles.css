@@ -139,6 +139,8 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .file input { font-size: 12px; max-width: 100%; color: var(--muted); }
 .file input::file-selector-button { margin-right: 8px; border: 0; background: var(--soft); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer; }
 .file small { color: var(--muted); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.file.upload small { white-space: normal; }
+.field > .chip { align-self: flex-start; margin-top: 6px; }
 
 .learn { display: flex; flex-direction: column; gap: 8px; background: var(--soft); border-radius: 10px; padding: 10px 12px; }
 .toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; }

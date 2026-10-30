@@ -9,7 +9,7 @@ import { topicNames, type TopicInfo } from "./topic";
 
 export { resolveTopic, type TopicInfo } from "./topic";
 
-export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive" | "Pexels" | "Pixabay" | "Mixkit";
+export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive" | "Pexels" | "Pixabay" | "Mixkit" | "내 영상";
 
 /** reusable: 재사용 가능한 라이선스만, any: 라이선스와 관계없이 공개된 영상 전체 */
 export type LicenseMode = "reusable" | "any";
@@ -31,6 +31,8 @@ export interface SourceVideo {
   trusted?: boolean;
   /** 분류·태그 등 검열에 함께 쓰는 설명 */
   tags?: string;
+  /** 사용자가 직접 올린 영상 파일 (있으면 내려받지 않고 이 파일을 씀) */
+  file?: File;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
   fallbackUrl?: string;
   poster: string | null;
@@ -453,6 +455,27 @@ export async function findSources(
   return { sources: rankSources([...unique.values()], topic), reports };
 }
 
+/** 사용자가 올린 영상 파일을 후보 영상으로 만듭니다. 검색 결과보다 먼저, 관련성 검사 없이 씁니다. */
+export function uploadedSource(file: File, index: number): SourceVideo {
+  return {
+    id: `upload:${index}:${file.name}:${file.size}`,
+    provider: "내 영상",
+    title: file.name.replace(/\.[^.]+$/, "") || `내 영상 ${index + 1}`,
+    author: "나",
+    license: "직접 올린 영상",
+    licenseUrl: null,
+    reusable: true,
+    trusted: true,
+    pageUrl: "",
+    mediaUrl: "",
+    file,
+    poster: null,
+    duration: null,
+    bytes: file.size,
+    relevance: 10,
+  };
+}
+
 /** 브라우저의 네트워크 오류를 알아들을 수 있는 말로 바꿉니다. */
 export function describeError(error: unknown): string {
   if (error instanceof TypeError) return "접속이 막혔어요(네트워크·CORS)";
@@ -500,6 +523,11 @@ export async function downloadSource(
   signal?: AbortSignal,
   maxBytes = MAX_SOURCE_BYTES
 ): Promise<Blob> {
+  // 직접 올린 파일은 이미 기기에 있으므로 크기 제한 없이 그대로 씁니다.
+  if (source.file) {
+    onProgress(1);
+    return source.file;
+  }
   try {
     return await downloadFrom(source.mediaUrl, source.bytes, onProgress, signal, maxBytes);
   } catch (error) {

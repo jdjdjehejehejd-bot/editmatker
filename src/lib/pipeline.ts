@@ -9,7 +9,7 @@ import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
-import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
+import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, uploadedSource, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
 import { searchReferenceEdits } from "./social";
@@ -42,6 +42,8 @@ export interface PipelineInput {
   learnOnline: boolean;
   /** 사용자가 올린 참고 에딧 (최대 3개) */
   referenceFiles: File[];
+  /** 편집에 쓸 영상을 직접 올린 파일 (주제 없이 이것만으로도 만들 수 있음) */
+  uploadFiles?: File[];
   /** 자동 작곡 배경음악 스타일 (내 음악 파일을 넣으면 쓰지 않음) */
   musicStyle?: MusicStyle;
   /** 편집 스타일 직접 설정 (비어 있으면 특징 문장·참고 에딧으로 자동) */
@@ -96,6 +98,9 @@ export interface PipelineEvents {
 
 /** 여러 주제를 동시에 쓸 때 한 번에 받을 영상 수의 상한 */
 const MAX_TOTAL_SOURCES = 8;
+/** 직접 올릴 수 있는 영상 수 */
+export const MAX_UPLOADS = 8;
+const UPLOAD_LABEL = "내 영상";
 
 export async function runPipeline(input: PipelineInput, events: PipelineEvents, signal: AbortSignal): Promise<PipelineResult> {
   // 특징·분위기에 NSFW를 적었으면 성적 콘텐츠 검열만 끕니다(다른 카테고리는 그대로).
@@ -106,9 +111,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 분위기를 직접 골랐으면 그 분위기로 읽고, 나머지 직접 설정은 참고 에딧 학습 뒤에 덮어씁니다(직접 설정이 우선).
   let style = parseStyle(input.features, { mood: input.styleOverrides?.mood });
   const specs = parseTopicInput(input.topic);
-  if (!specs.length) throw new Error("주제를 입력해 주세요.");
+  const uploads = (input.uploadFiles ?? []).slice(0, MAX_UPLOADS);
+  if (!specs.length && !uploads.length) throw new Error("주제를 입력하거나 편집할 영상을 올려 주세요.");
 
-  events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
+  if (specs.length) events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
   // 검열: 주제가 가리키는 대상(영어 이름, 설명)이 부적절하면 생성하지 않습니다.
   const badTopic = infos.find(info => !isTopicAllowed(info, policy));
@@ -120,7 +126,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const groups = infos.map((info, i) => ({ label: info.label, weight: specs[i].weight, queries: queriesFor(info) }));
   events.queries(groups);
   const queryCount = groups.reduce((sum, g) => sum + g.queries.length, 0);
-  events.step("search", `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
+  if (specs.length) events.step("search", `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
   const found = await Promise.all(infos.map(info => findSources(info, style.searchHints, input.licenseMode, input.helper, signal, input.stockKeys)));
 
   // 주제마다 쓸 수 있는 후보를 고릅니다(검열·관련성). 여러 주제에 같은 영상이 걸리면 아래에서 한 주제에만 줍니다.
@@ -174,8 +180,30 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     reports: found[i].reports,
     irrelevant: eligible[i].irrelevant,
   }));
-  events.candidates(topics.flatMap(t => t.candidates));
-  const active = topics.filter(t => t.candidates.length);
+  // 직접 올린 영상은 하나의 "주제"처럼 다룹니다. 주제와 함께 쓰면 편집의 절반을 차지합니다.
+  const uploadTopic: TopicResult | null = uploads.length
+    ? {
+        info: {
+          query: UPLOAD_LABEL,
+          label: UPLOAD_LABEL,
+          englishLabel: null,
+          description: null,
+          commonsCategory: null,
+          wikidataVideos: [],
+          // 함께 입력한 주제가 스포츠·인물이면 올린 영상도 같은 기준으로 봅니다(경기 장면 오탐 방지, 사람 위주 장면 선택).
+          sports: infos.some(info => info.sports),
+          person: infos.some(info => info.person),
+        },
+        weight: specs.length ? specs.reduce((sum, spec) => sum + spec.weight, 0) : 1,
+        queries: [],
+        candidates: uploads.map(uploadedSource),
+        reports: [],
+        irrelevant: 0,
+      }
+    : null;
+  events.candidates([...(uploadTopic?.candidates ?? []), ...topics.flatMap(t => t.candidates)]);
+  const online = topics.filter(t => t.candidates.length);
+  const active = uploadTopic ? [uploadTopic, ...online] : online;
   if (!active.length) {
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
     const details = topics.map(t => (topics.length > 1 ? `[${t.info.label}]\n` : "") + summarizeReports(t.reports)).join("\n\n");
@@ -196,7 +224,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 속도: 참고 에딧 학습과 내 음악 분석은 원본 영상 받기·분석과 동시에 진행합니다.
   // 원본 영상 분석은 배운 스타일과 무관하고, 배운 값(템포·컷 리듬)은 하이라이트를 고를 때(꺼낼 때) 반영하므로 결과는 같습니다.
   const learnPromise =
-    input.learnOnline || input.referenceFiles.length ? learnStyle(input, active.reduce((a, b) => (b.weight > a.weight ? b : a)).info, style, policy, events, signal, failures) : Promise.resolve(null);
+    // 주제 없이 올린 영상만 쓰면 인터넷에서 찾을 이름이 없으므로 올린 참고 에딧으로만 배웁니다.
+    (input.learnOnline && online.length) || input.referenceFiles.length
+      ? learnStyle({ ...input, learnOnline: input.learnOnline && online.length > 0 }, (online.length ? online : active).reduce((a, b) => (b.weight > a.weight ? b : a)).info, style, policy, events, signal, failures)
+      : Promise.resolve(null);
   const musicPromise = input.musicFile ? prepareUserMusic(input.musicFile, input.seconds) : Promise.resolve(null);
   // 다른 곳에서 먼저 실패해 기다리지 못하게 돼도 처리되지 않은 오류로 남지 않게
   learnPromise.catch(() => undefined);
@@ -210,8 +241,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   let approxCuts = 0;
 
   // 영상 칸을 주제 비중대로 나눕니다. 주제가 많으면 주제마다 최소 1개는 받습니다.
-  const slots = Math.min(MAX_TOTAL_SOURCES, Math.max(input.sourceCount, active.length));
-  const quota = allocateSlots(active.map(t => t.weight), slots);
+  // 직접 올린 영상은 모두 쓰고, 검색한 영상 칸은 그만큼 줄입니다(검색 주제가 있으면 최소 2칸).
+  const onlineSlots = online.length ? Math.min(Math.max(input.sourceCount, online.length), Math.max(2, MAX_TOTAL_SOURCES - uploads.length)) : 0;
+  const slots = uploads.length + onlineSlots;
+  const quota = [...(uploadTopic ? [uploads.length] : []), ...(online.length ? allocateSlots(online.map(t => t.weight), onlineSlots) : [])];
   const totalWeight = active.reduce((sum, t) => sum + t.weight, 0);
 
   const loaded: LoadedSource[] = [];
@@ -411,12 +444,13 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   const used = new Set(plan.segments.map(s => s.sourceId));
   const credits = loaded
-    .filter(s => used.has(s.id))
+    .filter(s => used.has(s.id) && !s.file)
     .map(s => `"${s.title}" — ${s.author} · ${s.license} · ${s.provider}`);
   if (!userMusic) credits.push("Music: generated by editmatker");
 
-  const title = combinedTitle(active.filter(t => loadedBy.get(t)!.length).map(t => t.info.label));
-  const topicSummary: TopicSummary[] = topics.map(t => {
+  const titled = online.filter(t => loadedBy.get(t)!.length);
+  const title = titled.length ? combinedTitle(titled.map(t => t.info.label)) : UPLOAD_LABEL;
+  const topicSummary: TopicSummary[] = [...(uploadTopic ? [uploadTopic] : []), ...topics].map(t => {
     const used = loadedBy.get(t)?.length ?? 0;
     let note: string | null = null;
     if (!used) {

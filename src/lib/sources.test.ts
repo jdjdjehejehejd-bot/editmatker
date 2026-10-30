@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildArchiveQuery, buildCommonsQueries, inspectArchiveFiles, REASON, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
+import { buildArchiveQuery, downloadSource, uploadedSource, buildCommonsQueries, inspectArchiveFiles, REASON, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
 
 const canPlayWebm = (mime: string) => mime.includes("webm");
 
@@ -213,5 +213,16 @@ describe("Internet Archive 비공개 파일", () => {
     const canPlay = () => true;
     expect(inspectArchiveFiles([{ name: "a.mp4", size: "1000", private: "true" }, { name: "b.mp4", size: "2000" }], canPlay).file?.name).toBe("b.mp4");
     expect(inspectArchiveFiles([{ name: "a.mp4", size: "1000", private: "true" }], canPlay)).toEqual({ file: null, reason: REASON.restricted });
+  });
+});
+
+describe("직접 올린 영상", () => {
+  it("내려받지 않고 올린 파일을 그대로 씀", async () => {
+    const file = new File([new Uint8Array(10)], "my clip.mp4", { type: "video/mp4" });
+    const source = uploadedSource(file, 0);
+    expect(source).toMatchObject({ provider: "내 영상", title: "my clip", trusted: true, bytes: 10 });
+    let progress = 0;
+    expect(await downloadSource(source, r => (progress = r), undefined, 1)).toBe(file);
+    expect(progress).toBe(1);
   });
 });
