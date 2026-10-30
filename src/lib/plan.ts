@@ -157,10 +157,16 @@ export function buildPlan(input: PlanInput): EditPlan {
     // 긴 컷은 슬로모션으로 여운을 줍니다. 감성 무드는 인트로에도 적용합니다.
     const slowAllowed = section !== "intro" || style.mood === "emotional";
     const rate = style.effects.has("slowmo") && beats >= 4 && slowAllowed ? SLOWMO_RATE : 1;
-    // 같은 장면을 다시 쓸 때는 시작점을 조금씩 밀어 반복감을 줄입니다.
     const srcLength = duration * rate;
     const shift = Math.max(0, h.length - srcLength);
-    const srcStart = h.start + (reuse ? ((reuse * 0.37) % 1) * shift : 0);
+    // 결정적 순간(임팩트)이 있으면 컷 안의 박자 위치에 오게 시작점을 잡습니다 — 주먹을 내지르기 직전에 컷이 넘어가지 않고,
+    // 맞는 순간이 비트에 떨어지게. 2박 이상이면 가운데 박자, 1박이면 컷 가운데쯤.
+    const impactAt = beats >= 2 ? (Math.floor(beats / 2) / beats) * srcLength : srcLength * 0.5;
+    const srcStart =
+      h.peak !== undefined && shift > 0 && !reuse
+        ? Math.min(h.start + shift, Math.max(h.start, h.peak - impactAt))
+        : // 같은 장면을 다시 쓸 때는 시작점을 조금씩 밀어 반복감을 줄입니다.
+          h.start + (reuse ? ((reuse * 0.37) % 1) * shift : 0);
     const inDrop = section === "drop";
     segments.push({
       sourceId: h.sourceId,

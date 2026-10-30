@@ -73,3 +73,45 @@ describe("applyOverrides", () => {
     expect(sanitizeOverrides(null)).toEqual({});
   });
 });
+
+describe("특징 문장에서 편집 스타일 읽기", () => {
+  it("여러 표현의 분위기를 알아들음", () => {
+    expect(parseStyle("긴장감 있고 소름 돋게").mood).toBe("cinematic");
+    expect(parseStyle("부드럽고 아련하게").mood).toBe("emotional");
+    expect(parseStyle("멋있고 타격감 있게").mood).toBe("hype");
+    expect(parseStyle("시티팝 느낌").mood).toBe("retro");
+  });
+
+  it("컷 속도·전환을 읽음", () => {
+    const fast = parseStyle("빠른 컷으로 정신없게");
+    expect(fast.pace).toBe("fast");
+    const sum = (list: number[]) => list.reduce((a, b) => a + b, 0);
+    expect(sum(fast.cutBeats.drop)).toBeLessThan(sum(parseStyle("").cutBeats.drop));
+    expect(parseStyle("천천히 롱테이크로").pace).toBe("slow");
+    expect(parseStyle("페이드로 부드럽게 넘어가게").transition).toBe("fade");
+    expect(parseStyle("휩 전환").transition).toBe("whip");
+  });
+
+  it("빼 달라는 효과는 뺌", () => {
+    expect(parseStyle("시네마틱하게, 슬로모션 없이").effects.has("slowmo")).toBe(false);
+    expect(parseStyle("하이프, 흔들림 빼고").effects.has("shake")).toBe(false);
+    expect(parseStyle("no glitch, retro").effects.has("glitch")).toBe(false);
+    expect(parseStyle("글리치 넣어서").effects.has("glitch")).toBe(true);
+  });
+
+  it("빠른/느린 템포와 읽은 말 목록", () => {
+    expect(parseStyle("빠른 비트").bpm).toBe(parseStyle("").bpm + 15);
+    const style = parseStyle("웅장하게, 흑백, 120bpm");
+    expect(style.bpm).toBe(120);
+    expect(style.matched).toEqual(expect.arrayContaining(["웅장", "흑백", "120bpm"]));
+    expect(parseStyle("fade transitions, fast cuts").searchHints).toEqual([]);
+  });
+
+  it("직접 고른 컷 속도는 특징에서 읽은 속도를 대신함", () => {
+    const sum = (list: number[]) => list.reduce((a, b) => a + b, 0);
+    const base = parseStyle("");
+    const normal = applyOverrides(parseStyle("빠른 컷"), { pace: "normal" });
+    expect(sum(normal.cutBeats.drop)).toBeGreaterThanOrEqual(sum(base.cutBeats.drop) - 2);
+    expect(normal.pace).toBe("normal");
+  });
+});

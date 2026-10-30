@@ -70,3 +70,33 @@ describe("의미 없는 장면 거르기", () => {
     expect(picks.every(p => p.start < 20)).toBe(true);
   });
 });
+
+describe("결정적 순간(임팩트)", () => {
+  // 고요하다가 22초에 확 튀는(펀치) 영상
+  const samples = Array.from({ length: 120 }, (_, i) => {
+    const t = i * 0.25;
+    const hit = Math.abs(t - 22) < 0.3;
+    return { t, motion: hit ? 0.3 : 0.03 + 0.005 * Math.sin(i), audio: hit ? 0.9 : 0.2, color: 0.4, brightness: 0.5, cut: false, detail: 0.05 };
+  });
+
+  it("튀는 순간을 찾아 구간 가운데쯤 오게 잡음", async () => {
+    const { impactSamples, pickHighlights, scoreSamples, PEAK_POSITION } = await import("./highlights");
+    const { parseStyle } = await import("./style");
+    const impact = impactSamples(samples);
+    expect(samples[impact.indexOf(Math.max(...impact))].t).toBeCloseTo(22, 0);
+    const [best] = pickHighlights("a", samples, scoreSamples(samples, parseStyle("").weights), 3, 3, 30);
+    expect(best.peak).toBeCloseTo(22, 0);
+    expect(best.start).toBeCloseTo(best.peak! - PEAK_POSITION * 3, 1);
+  });
+
+  it("편집에서 임팩트가 컷 안의 박자에 오게 시작점을 잡음", async () => {
+    const { buildPlan } = await import("./plan");
+    const { parseStyle } = await import("./style");
+    const plan = buildPlan({ highlights: [{ sourceId: "a", start: 20, length: 4, score: 1, peak: 23.5 }], style: parseStyle(""), totalSeconds: 8 });
+    const seg = plan.segments.find(s => s.section === "drop")!;
+    const srcEnd = seg.srcStart + seg.duration * seg.rate;
+    // 맞는 순간이 컷이 끝나기 전에, 컷 안에서 보임
+    expect(seg.srcStart).toBeLessThanOrEqual(23.5);
+    expect(srcEnd).toBeGreaterThan(23.5);
+  });
+});

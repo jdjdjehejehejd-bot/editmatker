@@ -18,6 +18,8 @@ export interface Preset {
   licenseMode: LicenseMode;
   /** 배경음악 스타일 (예전 프리셋에는 없으므로 선택 사항) */
   musicStyle?: MusicStyle;
+  /** 배경음악을 무료 음악 사이트에서 찾을지 */
+  freeMusic?: boolean;
   /** 편집 스타일 직접 설정 */
   style?: StyleOverrides;
   /** 제목·출처·텍스트 */
@@ -62,6 +64,7 @@ export function sanitizePreset(value: any): Preset | null {
     musicStyle: MUSIC_STYLES.includes(value.musicStyle) ? value.musicStyle : "auto",
     style: sanitizeOverrides(value.style),
     overlay: sanitizeOverlay(value.overlay),
+    freeMusic: value.freeMusic === true,
     framing: Object.prototype.hasOwnProperty.call(FRAMING_LABEL, value.framing) ? value.framing : "auto",
   };
 }
@@ -105,7 +108,8 @@ export function matchesPreset(preset: Preset, settings: PresetSettings) {
     (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto") &&
     JSON.stringify(sanitizeOverrides(preset.style)) === JSON.stringify(sanitizeOverrides(settings.style)) &&
     JSON.stringify(sanitizeOverlay(preset.overlay)) === JSON.stringify(sanitizeOverlay(settings.overlay)) &&
-    (preset.framing ?? "auto") === (settings.framing ?? "auto")
+    (preset.framing ?? "auto") === (settings.framing ?? "auto") &&
+    Boolean(preset.freeMusic) === Boolean(settings.freeMusic)
   );
 }
 
