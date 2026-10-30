@@ -307,7 +307,7 @@ export default function App() {
             </div>
           )}
 
-          {blockedInput && <p className="error">🛡 {blockedInput}</p>}
+          {blockedInput && <p className="error blocked">🚫 {blockedInput}</p>}
           <p className="censor-note">🛡 검열 켜짐 · 부적절한 단어가 들어간 입력·영상과 선정적인 장면이 감지된 영상은 쓰지 않아요.</p>
 
           {status === "running" ? (
@@ -316,7 +316,7 @@ export default function App() {
             </button>
           ) : (
             <button className="primary" type="button" onClick={start} disabled={!topic.trim() || Boolean(blockedInput)}>
-              {status === "done" ? "다시 만들기" : "에딧 만들기"}
+              {blockedInput ? "생성 불가" : status === "done" ? "다시 만들기" : "에딧 만들기"}
             </button>
           )}
 
@@ -348,7 +348,7 @@ export default function App() {
               ))}
             </div>
           )}
-          {error && <p className="error">{error}</p>}
+          {error && <p className={`error ${error.startsWith("생성 불가") ? "blocked" : ""}`}>{error.startsWith("생성 불가") ? `🚫 ${error}` : error}</p>}
         </section>
 
         <section className="panel stage" ref={stageRef}>

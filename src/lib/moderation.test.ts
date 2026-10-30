@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { checkUserInput, findBlockedWords, isTextAllowed, judgeFrames } from "./moderation";
+import { checkUserInput, findBlockedWords, isTextAllowed, isTopicAllowed, judgeFrames, shouldBlockTopic } from "./moderation";
 
 const words = (text: string) => findBlockedWords(text).map(m => m.word);
 
@@ -37,7 +37,7 @@ describe("금지어 검사", () => {
 
   it("입력에 금지어가 있으면 이유를 알려 준다", () => {
     expect(checkUserInput("고양이", "신나는 빠른 컷")).toBeNull();
-    expect(checkUserInput("고양이, 야동", "")).toMatch(/부적절한 단어\(성적\)/);
+    expect(checkUserInput("고양이, 야동", "")).toMatch(/^생성 불가 — 부적절한 단어\(성적\)/);
     expect(checkUserInput("고양이", "fucking hype")).toMatch(/욕설·혐오/);
   });
 });
@@ -53,5 +53,21 @@ describe("장면 판정", () => {
   });
   it("평범한 장면은 통과", () => {
     expect(judgeFrames([safe, safe, safe])).toEqual({ blocked: false, reason: null });
+  });
+});
+
+describe("주제 단위 차단", () => {
+  it("찾은 영상의 30% 이상(최소 2개)이 검열 대상이면 막는다", () => {
+    expect(shouldBlockTopic(0, 10)).toBe(false);
+    expect(shouldBlockTopic(1, 2)).toBe(false); // 우연한 1개는 봐준다
+    expect(shouldBlockTopic(2, 10)).toBe(false); // 20%
+    expect(shouldBlockTopic(3, 10)).toBe(true); // 30%
+    expect(shouldBlockTopic(2, 2)).toBe(true);
+    expect(shouldBlockTopic(0, 0)).toBe(false);
+  });
+
+  it("주제가 가리키는 대상의 설명이 부적절하면 막는다", () => {
+    expect(isTopicAllowed({ query: "어떤 이름", label: "어떤 이름", englishLabel: "Some Name", description: "Japanese pornographic actress" })).toBe(false);
+    expect(isTopicAllowed({ query: "손흥민", label: "손흥민", englishLabel: "Son Heung-min", description: "South Korean footballer" })).toBe(true);
   });
 });

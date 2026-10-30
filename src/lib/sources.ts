@@ -23,6 +23,8 @@ export interface SourceVideo {
   reusable: boolean;
   pageUrl: string;
   mediaUrl: string;
+  /** 출처가 성인 콘텐츠로 표시한 영상 (예: Reddit NSFW 게시물) — 검열 비율 계산에 쓰고 받지는 않음 */
+  nsfw?: boolean;
   /** 분류·태그 등 검열에 함께 쓰는 설명 */
   tags?: string;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
