@@ -3,6 +3,9 @@
 // 라이선스(Commons·Internet Archive)만으로 좁힐 수 있습니다.
 
 import { searchReddit, searchYouTube } from "./social";
+import { topicNames, type TopicInfo } from "./topic";
+
+export { resolveTopic, type TopicInfo } from "./topic";
 
 export type Provider = "YouTube" | "Reddit" | "Wikimedia Commons" | "Internet Archive";
 
@@ -40,14 +43,6 @@ export interface SearchReport {
 
 export type SearchStats = { scanned: number };
 
-export interface TopicInfo {
-  query: string;
-  label: string;
-  englishLabel: string | null;
-  description: string | null;
-  commonsCategory: string | null;
-  wikidataVideos: string[];
-}
 
 export const MAX_SOURCE_BYTES = 150 * 1024 * 1024;
 const MIN_DURATION = 3;
@@ -72,43 +67,6 @@ function api(base: string, params: Record<string, string>) {
   return url.toString();
 }
 
-/** Wikidata에서 주제를 찾아 영어 이름, Commons 분류, 대표 영상 파일을 얻습니다. */
-export async function resolveTopic(query: string, signal?: AbortSignal): Promise<TopicInfo> {
-  const fallback: TopicInfo = { query, label: query, englishLabel: null, description: null, commonsCategory: null, wikidataVideos: [] };
-  try {
-    const language = /[가-힣]/.test(query) ? "ko" : "en";
-    const search = await getJson(
-      api("https://www.wikidata.org/w/api.php", {
-        action: "wbsearchentities", search: query, language, uselang: language, type: "item", limit: "1",
-      }),
-      signal
-    );
-    const hit = search?.search?.[0];
-    if (!hit?.id) return fallback;
-    const data = await getJson(
-      api("https://www.wikidata.org/w/api.php", {
-        action: "wbgetentities", ids: hit.id, props: "labels|descriptions|claims", languages: "en|ko",
-      }),
-      signal
-    );
-    const entity = data?.entities?.[hit.id];
-    const claimValues = (property: string): string[] =>
-      (entity?.claims?.[property] ?? [])
-        .map((claim: any) => claim?.mainsnak?.datavalue?.value)
-        .filter((value: unknown): value is string => typeof value === "string");
-    return {
-      query,
-      label: entity?.labels?.ko?.value ?? hit.label ?? query,
-      englishLabel: entity?.labels?.en?.value ?? null,
-      description: entity?.descriptions?.ko?.value ?? entity?.descriptions?.en?.value ?? hit.description ?? null,
-      commonsCategory: claimValues("P373")[0] ?? null,
-      wikidataVideos: claimValues("P10"),
-    };
-  } catch (error) {
-    if (signal?.aborted) throw error;
-    return fallback;
-  }
-}
 
 // ---------------------------------------------------------------------------
 // 라이선스 허용 목록: 2차 편집이 허용되는 Public domain, CC0, CC BY, CC BY-SA만 사용합니다.
@@ -231,15 +189,19 @@ async function commonsQuery(params: Record<string, string>, signal?: AbortSignal
   return Object.values(data?.query?.pages ?? {});
 }
 
+/** Commons 검색어: 분류 → 이름(+특징) → 별칭 → 관련 주제 순. 뒤로 갈수록 관련도를 낮게 매깁니다. */
 export function buildCommonsQueries(topic: TopicInfo, hints: string[]): string[] {
   const queries: string[] = [];
+  const quote = (text: string) => `"${text.replace(/"/g, "")}"`;
   const names = [...new Set([topic.englishLabel, topic.query].filter((v): v is string => Boolean(v)))];
-  if (topic.commonsCategory) queries.push(`filetype:video incategory:"${topic.commonsCategory.replace(/"/g, "")}"`);
+  if (topic.commonsCategory) queries.push(`filetype:video incategory:${quote(topic.commonsCategory)}`);
   for (const name of names) {
-    if (hints.length) queries.push(`filetype:video "${name}" ${hints.join(" ")}`);
-    queries.push(`filetype:video "${name}"`);
+    if (hints.length) queries.push(`filetype:video ${quote(name)} ${hints.join(" ")}`);
+    queries.push(`filetype:video ${quote(name)}`);
   }
   if (names[0]) queries.push(`filetype:video ${names[0]}`);
+  for (const alias of (topic.aliases ?? []).slice(0, 2)) queries.push(`filetype:video ${quote(alias)}`);
+  for (const related of (topic.related ?? []).slice(0, 3)) queries.push(`filetype:video ${quote(related)}`);
   return [...new Set(queries)];
 }
 
@@ -295,9 +257,11 @@ function parseLength(value: unknown): number | null {
   return Number(text) || null;
 }
 
-export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: LicenseMode): string {
-  const name = topic.englishLabel ?? topic.query;
-  const terms = [`"${name.replace(/"/g, "")}"`, ...hints].join(" ");
+/** Internet Archive 검색어. `related`면 주제 대신 관련 주제들로 찾습니다. */
+export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: LicenseMode, related = false): string {
+  const names = related ? (topic.related ?? []).slice(0, 4) : topicNames(topic).filter(n => !/[\uac00-\ud7a3]/.test(n) || !topic.englishLabel).slice(0, 4);
+  const any = `(${names.map(n => `"${n.replace(/"/g, "")}"`).join(" OR ")})`;
+  const terms = [any, ...(related ? [] : hints)].join(" ");
   // 대출 전용(내려받기 불가) 컬렉션은 처음부터 뺍니다.
   const base = `(${terms}) AND mediatype:(movies) AND NOT collection:(inlibrary OR printdisabled)`;
   if (mode === "any") return base;
@@ -305,8 +269,14 @@ export function buildArchiveQuery(topic: TopicInfo, hints: string[], mode: Licen
 }
 
 export async function searchArchive(topic: TopicInfo, hints: string[], mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
-  const limit = mode === "any" ? 10 : 6;
-  const q = buildArchiveQuery(topic, hints, mode);
+  const main = archiveQuery(buildArchiveQuery(topic, hints, mode), mode === "any" ? 10 : 6, 1.5, mode, signal, stats);
+  // 관련 주제 검색은 보충용이라 실패해도 무시합니다.
+  const related = topic.related?.length ? archiveQuery(buildArchiveQuery(topic, hints, mode, true), 4, 0.7, mode, signal, stats).catch(() => []) : Promise.resolve([]);
+  const [a, b] = await Promise.all([main, related]);
+  return [...a, ...b.filter(source => !a.some(other => other.id === source.id))];
+}
+
+async function archiveQuery(q: string, limit: number, base: number, mode: LicenseMode, signal?: AbortSignal, stats?: SearchStats): Promise<SourceVideo[]> {
   const url = new URL("https://archive.org/advancedsearch.php");
   url.search = new URLSearchParams({ q, rows: String(limit), output: "json", sort: "downloads desc" }).toString();
   for (const field of ["identifier", "title", "creator", "licenseurl"]) url.searchParams.append("fl[]", field);
@@ -335,7 +305,7 @@ export async function searchArchive(topic: TopicInfo, hints: string[], mode: Lic
         poster: `https://archive.org/services/img/${encodeURIComponent(doc.identifier)}`,
         duration: file.duration,
         bytes: file.bytes,
-        relevance: 1.5 - index * 0.05,
+        relevance: base - index * 0.05,
       };
     })
   );
@@ -397,7 +367,7 @@ export function summarizeReports(reports: SearchReport[]): string {
 }
 
 export function rankSources(sources: SourceVideo[], topic: TopicInfo): SourceVideo[] {
-  const names = [topic.englishLabel, topic.query, topic.label].filter(Boolean).map(n => n!.toLowerCase());
+  const names = topicNames(topic).map(n => n.toLowerCase());
   return [...sources]
     .map(source => {
       const titleHit = names.some(name => source.title.toLowerCase().includes(name)) ? 0.5 : 0;

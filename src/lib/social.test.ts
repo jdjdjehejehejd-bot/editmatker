@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { afterEach, vi } from "vitest";
-import { parseRedditSearch, parseYouTubeSearch, searchYouTube, socialQueries, youtubeId } from "./social";
+import { parseRedditSearch, parseYouTubeSearch, searchYouTube, youtubeId } from "./social";
+import { expandQueries } from "./topic";
 import { rankSources, type TopicInfo } from "./sources";
 
 const helper = "http://localhost:8787";
@@ -68,7 +69,8 @@ describe("검색 보조", () => {
   });
 
   it("한국어와 영어 검색어를 모두 만든다", () => {
-    expect(socialQueries(topic, ["goal"])).toEqual(["손흥민", "Son Heung-min goal"]);
+    const socialQueries = (t: TopicInfo, hints: string[]) => expandQueries(t, hints).map(q => q.q);
+    expect(socialQueries(topic, ["goal"])).toEqual(["손흥민", "Son Heung-min goal", "Son Heung-min"]);
     // 영어로 입력해도 Wikidata의 한국어 이름으로 함께 찾는다
     expect(socialQueries({ ...topic, query: "Tokyo", label: "도쿄", englishLabel: "Tokyo" }, [])).toEqual(["도쿄", "Tokyo"]);
     // 영어 이름을 모르면 한국어로만
@@ -86,7 +88,7 @@ describe("검색 보조", () => {
       return Response.json({ entries });
     });
     const sources = await searchYouTube(topic, ["goal"], helper);
-    expect(calls.sort()).toEqual(["Son Heung-min goal", "손흥민"].sort());
+    expect(calls.sort()).toEqual(["Son Heung-min", "Son Heung-min goal", "손흥민"].sort());
     expect(sources.map(s => s.id).sort()).toEqual(["youtube:both", "youtube:en1", "youtube:ko1"]);
   });
 
