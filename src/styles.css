@@ -106,6 +106,19 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .style-preview strong { font-weight: 600; margin-right: 3px; background: var(--ig); -webkit-background-clip: text; background-clip: text; color: transparent; }
 .style-preview span { background: var(--soft); border-radius: 999px; padding: 3px 9px; color: var(--ink-2); }
 
+.style-editor { background: var(--soft); border-radius: 12px; padding: 12px; margin: -2px 0 16px; display: flex; flex-direction: column; gap: 10px; }
+.style-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.style-head strong { font-size: 12px; font-weight: 600; }
+.style-head small { flex: 1; color: var(--muted); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.style-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 8px; }
+.style-grid label { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
+.style-grid label > span { font-size: 11px; color: var(--muted); font-weight: 600; }
+.style-grid .select { background-color: #fff; padding-top: 8px; padding-bottom: 8px; }
+.style-grid input.select { background-image: none; padding-right: 12px; }
+.effect-toggles { display: flex; flex-wrap: wrap; gap: 6px; }
+.effect { position: relative; border: 1px solid var(--line); background: #fff; color: var(--muted); border-radius: 999px; padding: 5px 11px; font-size: 12px; font-weight: 600; transition: background 0.15s, color 0.15s, border-color 0.15s; }
+.effect.on { background: var(--ink); border-color: var(--ink); color: #fff; }
+.effect.set::after { content: ""; position: absolute; top: 1px; right: 3px; width: 6px; height: 6px; border-radius: 50%; background: var(--blue); }
 .segmented { display: flex; background: var(--soft); border-radius: 9px; padding: 3px; }
 .segmented button { flex: 1; border: 0; background: transparent; border-radius: 7px; padding: 7px 4px; font-size: 13px; color: var(--muted); font-weight: 600; transition: background 0.15s, color 0.15s; }
 .segmented button:hover:not(.on) { color: var(--ink); }

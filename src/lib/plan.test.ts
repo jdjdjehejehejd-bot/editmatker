@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { Highlight } from "./highlights";
 import { buildPlan, interleaveBySource, requiredHighlightLength } from "./plan";
-import { parseStyle } from "./style";
+import { applyOverrides, parseStyle } from "./style";
 
 const highlights: Highlight[] = ["a", "b", "c"].flatMap(sourceId =>
   [0.9, 0.6, 0.3].map((score, i) => ({ sourceId, start: 10 + i * 20, length: 4, score: score - (sourceId === "a" ? 0 : 0.05) }))
@@ -81,5 +81,13 @@ describe("자연스러운 전환", () => {
     expect(plan.segments[0].transition).toBe("cut");
     expect(plan.segments.some(s => s.velocity)).toBe(true);
     expect(plan.segments.filter(s => s.velocity).every(s => s.section === "drop" && s.rate === 1)).toBe(true);
+  });
+});
+
+describe("직접 고른 전환", () => {
+  it("모든 컷에 같은 전환을 씀", () => {
+    const style = applyOverrides(parseStyle(""), { transition: "fade" });
+    const plan = buildPlan({ highlights, style, totalSeconds: 30 });
+    expect(plan.segments.slice(1).every(s => s.transition === "fade")).toBe(true);
   });
 });

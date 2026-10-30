@@ -12,7 +12,7 @@ import { describeError, downloadSource, findSources, REASON, summarizeReports, r
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
 import { searchReferenceEdits } from "./social";
-import { defaultBpm, parseStyle, type EditStyle, type Mood, type MusicStyle } from "./style";
+import { applyOverrides, defaultBpm, parseStyle, type EditStyle, type Mood, type MusicStyle, type StyleOverrides } from "./style";
 
 export type StepId = "topic" | "search" | "learn" | "download" | "analyze" | "plan" | "render";
 
@@ -41,6 +41,8 @@ export interface PipelineInput {
   referenceFiles: File[];
   /** 자동 작곡 배경음악 스타일 (내 음악 파일을 넣으면 쓰지 않음) */
   musicStyle?: MusicStyle;
+  /** 편집 스타일 직접 설정 (비어 있으면 특징 문장·참고 에딧으로 자동) */
+  styleOverrides?: StyleOverrides;
 }
 
 export interface TopicResult {
@@ -98,7 +100,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 검열: 부적절한 단어가 있으면 시작하지 않습니다.
   const blocked = checkUserInput(input.topic, input.features);
   if (blocked) throw new GenerationBlockedError(blocked);
-  let style = parseStyle(input.features);
+  // 분위기를 직접 골랐으면 그 분위기로 읽고, 나머지 직접 설정은 참고 에딧 학습 뒤에 덮어씁니다(직접 설정이 우선).
+  let style = parseStyle(input.features, { mood: input.styleOverrides?.mood });
   const specs = parseTopicInput(input.topic);
   if (!specs.length) throw new Error("주제를 입력해 주세요.");
 
@@ -346,7 +349,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
     // 참고 에딧에서 컷 리듬·템포·색감·효과를 배워 스타일에 반영합니다(하이라이트 길이·템포를 정하기 전에).
     profile = await learnPromise;
-    style = applyProfile(style, profile);
+    style = applyOverrides(applyProfile(style, profile), input.styleOverrides);
     userMusic = await musicPromise;
     // 배경음악 스타일을 고르면 그 장르로 작곡하고, 템포를 직접 정하지 않았으면 장르의 기본 템포로 컷도 맞춥니다.
     musicMood = !input.musicStyle || input.musicStyle === "auto" ? style.mood : input.musicStyle;

@@ -13,7 +13,7 @@ describe("프리셋", () => {
     const storage = memoryStorage();
     const list = upsertPreset([], "토트넘 듀오", settings, 1);
     savePresets(list, storage);
-    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto" }]);
+    expect(loadPresets(storage)).toEqual([{ id: "preset-1", name: "토트넘 듀오", ...settings, musicStyle: "auto", style: {} }]);
   });
 
   it("같은 이름은 덮어쓰고, 새 이름은 맨 앞에 추가한다", () => {
@@ -52,5 +52,15 @@ describe("배경음악 스타일", () => {
     expect(sanitizePreset({ name: "old", topic: "고양이" })?.musicStyle).toBe("auto");
     expect(sanitizePreset({ name: "x", topic: "고양이", musicStyle: "jazz" })?.musicStyle).toBe("auto");
     expect(matchesPreset(preset, { ...settings, musicStyle: "hype" })).toBe(false);
+  });
+});
+
+describe("프리셋 편집 스타일", () => {
+  it("편집 스타일을 저장하고 비교함", () => {
+    const withStyle = { ...settings, style: { grade: "mono" as const, pace: "fast" as const } };
+    const preset = sanitizePreset({ id: "a", name: "a", ...withStyle });
+    expect(preset?.style).toEqual({ grade: "mono", pace: "fast" });
+    expect(matchesPreset(preset!, withStyle)).toBe(true);
+    expect(matchesPreset(preset!, settings)).toBe(false);
   });
 });

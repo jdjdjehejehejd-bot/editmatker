@@ -101,6 +101,8 @@ function fillSection(pattern: number[], totalBeats: number): number[] {
  * - 레트로: 드롭 세 번째마다 휩
  */
 export function pickTransition(style: EditStyle, section: Section, dropIndex: number): Segment["transition"] {
+  // 전환을 직접 골랐으면 모든 컷에 그 전환을 씁니다.
+  if (style.transition) return style.transition;
   if (style.mood === "emotional") return "fade";
   if (style.mood === "cinematic") return section === "drop" ? (dropIndex % 3 === 2 ? "whip" : "cut") : "fade";
   if (section !== "drop") return "cut";

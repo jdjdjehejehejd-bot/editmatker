@@ -20,6 +20,76 @@ export interface EditStyle {
   label: string;
   /** 특징에 "120bpm"처럼 템포를 직접 적었는지 */
   bpmExplicit?: boolean;
+  /** 컷 전환을 하나로 고정 (없으면 무드에 맞게 자동) */
+  transition?: TransitionStyle;
+}
+
+export type TransitionStyle = "cut" | "fade" | "whip" | "punch";
+export type Pace = "slow" | "normal" | "fast";
+
+/**
+ * 편집 스타일 직접 설정. 비어 있는 항목은 특징 문장(또는 참고 에딧)에서 자동으로 정해집니다.
+ * 우선순위: 직접 설정 > 참고 에딧에서 배운 값 > 특징 문장에서 읽은 값
+ */
+export interface StyleOverrides {
+  mood?: Mood;
+  bpm?: number;
+  grade?: Grade;
+  /** 효과별 켜기/끄기 (없는 효과는 자동) */
+  effects?: Partial<Record<Effect, boolean>>;
+  /** 컷 속도: 빠르게는 컷 길이를 절반으로, 느리게는 두 배로 */
+  pace?: Pace;
+  transition?: TransitionStyle;
+}
+
+export const MOOD_LABEL: Record<Mood, string> = { hype: "하이프", cinematic: "시네마틱", emotional: "감성", retro: "레트로" };
+export const PACE_LABEL: Record<Pace, string> = { slow: "느리게", normal: "보통", fast: "빠르게" };
+export const TRANSITION_LABEL: Record<TransitionStyle, string> = { cut: "바로 컷", fade: "크로스페이드", whip: "휩", punch: "줌 펀치" };
+
+function scalePattern(pattern: number[], factor: number) {
+  return pattern.map(beats => Math.min(8, Math.max(1, Math.round(beats * factor))));
+}
+
+/** 분위기 말고 나머지 직접 설정을 덮어씁니다(분위기는 parseStyle의 options.mood로 넘깁니다). */
+export function applyOverrides(style: EditStyle, overrides: StyleOverrides | undefined): EditStyle {
+  if (!overrides) return style;
+  const effects = new Set(style.effects);
+  for (const [effect, on] of Object.entries(overrides.effects ?? {}) as [Effect, boolean][]) {
+    if (on) effects.add(effect);
+    else effects.delete(effect);
+  }
+  const factor = overrides.pace === "fast" ? 0.5 : overrides.pace === "slow" ? 2 : 1;
+  return {
+    ...style,
+    bpm: overrides.bpm ? clamp(Math.round(overrides.bpm), 60, 180) : style.bpm,
+    bpmExplicit: style.bpmExplicit || Boolean(overrides.bpm),
+    grade: overrides.grade ?? style.grade,
+    effects,
+    cutBeats:
+      factor === 1
+        ? style.cutBeats
+        : { intro: scalePattern(style.cutBeats.intro, factor), drop: scalePattern(style.cutBeats.drop, factor), outro: scalePattern(style.cutBeats.outro, factor) },
+    transition: overrides.transition ?? style.transition,
+  };
+}
+
+/** 저장된 값(프리셋)에서 쓸 수 있는 설정만 골라냅니다. */
+const has = (table: object, key: unknown) => typeof key === "string" && Object.prototype.hasOwnProperty.call(table, key);
+
+export function sanitizeOverrides(value: any): StyleOverrides {
+  if (!value || typeof value !== "object") return {};
+  const out: StyleOverrides = {};
+  if (has(MOOD_PRESETS, value.mood)) out.mood = value.mood;
+  if (Number.isFinite(value.bpm) && value.bpm >= 60 && value.bpm <= 180) out.bpm = Math.round(value.bpm);
+  if (has(GRADE_LABEL, value.grade)) out.grade = value.grade;
+  if (has(PACE_LABEL, value.pace)) out.pace = value.pace;
+  if (has(TRANSITION_LABEL, value.transition)) out.transition = value.transition;
+  if (value.effects && typeof value.effects === "object") {
+    const effects: Partial<Record<Effect, boolean>> = {};
+    for (const [key, on] of Object.entries(value.effects)) if (has(EFFECT_LABEL, key) && typeof on === "boolean") effects[key as Effect] = on;
+    if (Object.keys(effects).length) out.effects = effects;
+  }
+  return out;
 }
 
 /** 배경음악 스타일 — auto면 편집 분위기를 따라갑니다 */
@@ -124,14 +194,15 @@ const HINT_DICTIONARY: [RegExp, string][] = [
   [/훈련|연습/, "training"],
 ];
 
-export function parseStyle(features: string): EditStyle {
+export function parseStyle(features: string, options: { mood?: Mood } = {}): EditStyle {
   const text = features.trim();
   const scores = (Object.keys(MOOD_KEYWORDS) as Mood[]).map(mood => ({
     mood,
     hits: (text.match(new RegExp(MOOD_KEYWORDS[mood].source, "gi")) ?? []).length,
   }));
   const best = scores.reduce((a, b) => (b.hits > a.hits ? b : a));
-  const mood: Mood = best.hits > 0 ? best.mood : "hype";
+  // 분위기를 직접 골랐으면 그 분위기의 기본값(템포·컷 리듬·효과)을 씁니다.
+  const mood: Mood = options.mood ?? (best.hits > 0 ? best.mood : "hype");
   const preset = MOOD_PRESETS[mood];
 
   const grade = GRADE_KEYWORDS.find(([, re]) => re.test(text))?.[0] ?? preset.grade;

@@ -8,7 +8,24 @@ import { BUILTIN_PRESETS, loadPresets, matchesPreset, savePresets, upsertPreset,
 import { parseTopicInput, type TopicSpec } from "./lib/topic";
 import { describeProfile } from "./lib/learn";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
-import { EFFECT_LABEL, GRADE_LABEL, MUSIC_STYLE_LABEL, parseStyle, type EditStyle, type MusicStyle } from "./lib/style";
+import {
+  applyOverrides,
+  EFFECT_LABEL,
+  GRADE_LABEL,
+  MOOD_LABEL,
+  MUSIC_STYLE_LABEL,
+  PACE_LABEL,
+  parseStyle,
+  TRANSITION_LABEL,
+  type Effect,
+  type EditStyle,
+  type Grade,
+  type Mood,
+  type MusicStyle,
+  type Pace,
+  type StyleOverrides,
+  type TransitionStyle,
+} from "./lib/style";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "topic", label: "주제 해석" },
@@ -43,6 +60,7 @@ export default function App() {
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [learnOnline, setLearnOnline] = useState(false);
   const [musicStyle, setMusicStyle] = useState<MusicStyle>("auto");
+  const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
@@ -82,12 +100,27 @@ export default function App() {
   const sourcesRef = useRef<HTMLElement>(null);
   const [liked, setLiked] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
-  const preview = useMemo(() => parseStyle(features), [features]);
+  // 특징 문장에서 자동으로 읽은 스타일 + 직접 설정한 항목
+  const autoStyle = useMemo(() => parseStyle(features), [features]);
+  const preview = useMemo(() => applyOverrides(parseStyle(features, { mood: overrides.mood }), overrides), [features, overrides]);
+  const hasOverrides = Object.keys(overrides).length > 0;
+  const setOverride = <K extends keyof StyleOverrides>(key: K, value: StyleOverrides[K] | undefined) =>
+    setOverrides(current => {
+      const next = { ...current };
+      if (value === undefined) delete next[key];
+      else next[key] = value;
+      return next;
+    });
+  const toggleEffect = (effect: Effect) =>
+    setOverrides(current => {
+      const effects = { ...current.effects, [effect]: !preview.effects.has(effect) };
+      return { ...current, effects };
+    });
   const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
   const blockedInput = useMemo(() => checkUserInput(topic, features), [topic, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle };
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle, style: overrides };
   // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
   const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle } : run!;
   const [width, height] = ASPECT_SIZE[shown.aspect];
@@ -117,6 +150,7 @@ export default function App() {
     setSourceCount(Math.min(preset.sourceCount, LIMITS.maxSources));
     setLicenseMode(preset.licenseMode);
     setMusicStyle(preset.musicStyle ?? "auto");
+    setOverrides(preset.style ?? {});
   };
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
@@ -164,7 +198,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, styleOverrides: overrides, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -339,13 +373,87 @@ export default function App() {
               <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
             </label>
 
-            <div className="style-preview" aria-live="polite">
-              <strong>{preview.label}</strong>
-              <span>{musicFile ? "BPM 자동" : `${preview.bpm} BPM`}</span>
-              <span>{GRADE_LABEL[preview.grade]}</span>
-              {[...preview.effects].map(effect => (
-                <span key={effect}>{EFFECT_LABEL[effect]}</span>
-              ))}
+            <div className="style-editor" aria-label="편집 스타일">
+              <div className="style-head">
+                <strong>편집 스타일</strong>
+                <small>{hasOverrides ? "직접 설정" : "특징에서 자동"} · {preview.label}</small>
+                <button type="button" className="chip" onClick={() => setOverrides({})} disabled={!hasOverrides}>
+                  자동으로
+                </button>
+              </div>
+              <div className="style-grid">
+                <label>
+                  <span>분위기</span>
+                  <select className="select" value={overrides.mood ?? ""} onChange={e => setOverride("mood", (e.target.value || undefined) as Mood | undefined)}>
+                    <option value="">자동 ({MOOD_LABEL[autoStyle.mood]})</option>
+                    {(Object.keys(MOOD_LABEL) as Mood[]).map(mood => (
+                      <option key={mood} value={mood}>
+                        {MOOD_LABEL[mood]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>템포 (BPM)</span>
+                  <input
+                    className="select"
+                    type="number"
+                    inputMode="numeric"
+                    min={60}
+                    max={180}
+                    disabled={Boolean(musicFile)}
+                    placeholder={musicFile ? "내 음악 템포" : `자동 (${parseStyle(features, { mood: overrides.mood }).bpm})`}
+                    value={overrides.bpm ?? ""}
+                    onChange={e => setOverride("bpm", e.target.value ? Number(e.target.value) : undefined)}
+                  />
+                </label>
+                <label>
+                  <span>색감</span>
+                  <select className="select" value={overrides.grade ?? ""} onChange={e => setOverride("grade", (e.target.value || undefined) as Grade | undefined)}>
+                    <option value="">자동 ({GRADE_LABEL[parseStyle(features, { mood: overrides.mood }).grade]})</option>
+                    {(Object.keys(GRADE_LABEL) as Grade[]).map(grade => (
+                      <option key={grade} value={grade}>
+                        {GRADE_LABEL[grade]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>컷 속도</span>
+                  <select className="select" value={overrides.pace ?? ""} onChange={e => setOverride("pace", (e.target.value || undefined) as Pace | undefined)}>
+                    <option value="">자동 (보통)</option>
+                    {(Object.keys(PACE_LABEL) as Pace[]).map(pace => (
+                      <option key={pace} value={pace}>
+                        {PACE_LABEL[pace]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label>
+                  <span>전환</span>
+                  <select className="select" value={overrides.transition ?? ""} onChange={e => setOverride("transition", (e.target.value || undefined) as TransitionStyle | undefined)}>
+                    <option value="">자동 (분위기에 맞게)</option>
+                    {(Object.keys(TRANSITION_LABEL) as TransitionStyle[]).map(transition => (
+                      <option key={transition} value={transition}>
+                        {TRANSITION_LABEL[transition]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+              </div>
+              <div className="effect-toggles" role="group" aria-label="효과">
+                {(Object.keys(EFFECT_LABEL) as Effect[]).map(effect => (
+                  <button
+                    key={effect}
+                    type="button"
+                    className={`effect ${preview.effects.has(effect) ? "on" : ""} ${overrides.effects?.[effect] !== undefined ? "set" : ""}`}
+                    aria-pressed={preview.effects.has(effect)}
+                    onClick={() => toggleEffect(effect)}
+                  >
+                    {EFFECT_LABEL[effect]}
+                  </button>
+                ))}
+              </div>
             </div>
 
             <div className="row">

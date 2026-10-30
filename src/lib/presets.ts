@@ -3,7 +3,7 @@
 
 import type { Aspect } from "./render";
 import type { LicenseMode } from "./sources";
-import type { MusicStyle } from "./style";
+import { sanitizeOverrides, type MusicStyle, type StyleOverrides } from "./style";
 
 export interface Preset {
   id: string;
@@ -16,6 +16,8 @@ export interface Preset {
   licenseMode: LicenseMode;
   /** 배경음악 스타일 (예전 프리셋에는 없으므로 선택 사항) */
   musicStyle?: MusicStyle;
+  /** 편집 스타일 직접 설정 */
+  style?: StyleOverrides;
   /** 기본 제공 프리셋은 지울 수 없습니다 */
   builtin?: boolean;
 }
@@ -52,6 +54,7 @@ export function sanitizePreset(value: any): Preset | null {
     sourceCount: Number.isInteger(value.sourceCount) && value.sourceCount >= 2 && value.sourceCount <= 8 ? value.sourceCount : 4,
     licenseMode: value.licenseMode === "reusable" ? "reusable" : "any",
     musicStyle: MUSIC_STYLES.includes(value.musicStyle) ? value.musicStyle : "auto",
+    style: sanitizeOverrides(value.style),
   };
 }
 
@@ -91,7 +94,8 @@ export function matchesPreset(preset: Preset, settings: PresetSettings) {
     preset.aspect === settings.aspect &&
     preset.sourceCount === settings.sourceCount &&
     preset.licenseMode === settings.licenseMode &&
-    (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto")
+    (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto") &&
+    JSON.stringify(sanitizeOverrides(preset.style)) === JSON.stringify(sanitizeOverrides(settings.style))
   );
 }
 
