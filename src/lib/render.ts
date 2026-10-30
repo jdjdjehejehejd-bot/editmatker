@@ -186,16 +186,17 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     const video = pool[index % POOL_SIZE];
     const url = urls.get(seg.sourceId)!;
     prepared[index] = (async () => {
-      if (video.src !== url) {
-        video.src = url;
+      if (video.src !== url) video.src = url;
+      // 같은 영상을 이어서 쓰더라도 아직 정보를 받는 중이면 기다립니다(길이를 모르는 채로 찾아가면 위치가 NaN이 됨).
+      if (video.readyState < 1) {
         await new Promise<void>(resolve => {
-          if (video.readyState >= 1) return resolve();
           video.addEventListener("loadedmetadata", () => resolve(), { once: true });
           video.addEventListener("error", () => resolve(), { once: true });
         });
       }
       video.pause();
-      await seek(video, Math.min(seg.srcStart, Math.max(0, video.duration - 0.2)));
+      const end = Number.isFinite(video.duration) ? Math.max(0, video.duration - 0.2) : seg.srcStart;
+      await seek(video, Math.min(seg.srcStart, end));
       video.playbackRate = seg.rate;
     })();
   };

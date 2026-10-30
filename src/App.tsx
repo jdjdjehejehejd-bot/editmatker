@@ -1,5 +1,6 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FRAMING_LABEL, type Framing } from "./lib/framing";
+import { preloadVision, topicFromFileNames } from "./lib/vision";
 import { DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
 import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
@@ -73,6 +74,11 @@ export default function App() {
   const patchOverlay = (patch: Partial<OverlaySettings>) => setOverlay(current => ({ ...current, ...patch }));
   const patchText = (index: number, patch: Partial<TextOverlay>) => setOverlay(current => ({ ...current, texts: current.texts.map((t, i) => (i === index ? { ...t, ...patch } : t)) }));
   const canStart = Boolean(topic.trim() || uploadFiles.length);
+  // 주제를 비우고 영상을 올렸으면 주제를 고를 때 쓸 모델을 미리 받아 둡니다(파일 이름으로 정해지면 받지 않음).
+  const needsVision = !topic.trim() && uploadFiles.length > 0 && !topicFromFileNames(uploadFiles.map(file => file.name));
+  useEffect(() => {
+    if (needsVision) preloadVision();
+  }, [needsVision]);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [stockKeys, setStockKeys] = useState<StockKeys>(() => loadStockKeys());
   const updateStockKey = (provider: keyof StockKeys, value: string) =>
@@ -396,12 +402,12 @@ export default function App() {
                 files={uploadFiles}
                 onChange={setUploadFiles}
                 label="영상 올리기"
-                hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 올린 영상만, 주제도 쓰면 찾은 영상과 섞어요`}
+                hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 영상을 보고 비슷한 주제를 골라 찾은 영상과 섞어요`}
               />
               {uploadFiles.length > 0 && (
                 <label className="toggle">
                   <input type="checkbox" checked={uploadsOnly} onChange={e => setUploadsOnly(e.target.checked)} />
-                  <span>영상 찾지 않고 올린 영상만 편집{topic.trim() ? " (주제는 제목·스타일에만 써요)" : ""}</span>
+                  <span>영상 찾지 않고 올린 영상만 편집{topic.trim() ? " (주제는 제목·스타일에만 써요)" : " (고른 주제는 제목·스타일에만 써요)"}</span>
                 </label>
               )}
             </div>
@@ -814,6 +820,12 @@ export default function App() {
                     </span>
                   ))}
                 </div>
+              )}
+              {result?.inferredTopic && (
+                <p className="learned">
+                  <b>고른 주제</b> 올린 영상의 {result.inferredTopic.source === "filename" ? "파일 이름" : "장면"}을 보고 "{result.inferredTopic.label}"(으)로 정했어요
+                  {result.inferredTopic.source === "vision" ? ` (확신 ${Math.round(result.inferredTopic.confidence * 100)}%)` : ""}
+                </p>
               )}
               {result?.track && (
                 <p className="learned">

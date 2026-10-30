@@ -54,6 +54,7 @@ export function loadVideo(url: string, signal?: AbortSignal): Promise<HTMLVideoE
   return new Promise((resolve, reject) => {
     const video = createHiddenVideo();
     let settled = false;
+    let measuring = false;
     const finish = (error?: Error) => {
       if (settled) return;
       settled = true;
@@ -71,7 +72,19 @@ export function loadVideo(url: string, signal?: AbortSignal): Promise<HTMLVideoE
         resolve(video);
       }
     };
-    const onLoaded = () => finish();
+    const onLoaded = () => {
+      // 휴대폰·화면 녹화(MediaRecorder) WebM은 끝까지 훑기 전에는 길이를 Infinity로 알려 줍니다.
+      // 끝으로 한 번 건너뛰면 브라우저가 실제 길이를 계산하므로, 그다음 처음으로 돌려놓고 씁니다.
+      if (video.duration === Infinity) {
+        // loadeddata·canplay가 둘 다 와도 한 번만 합니다.
+        if (!measuring) {
+          measuring = true;
+          resolveDuration(video).then(() => finish(), () => finish());
+        }
+        return;
+      }
+      finish();
+    };
     const onMetadata = () => {
       // iOS: 재생을 한 번 시작해야 프레임 데이터를 받습니다.
       void video.play().then(() => video.pause(), () => undefined);
@@ -92,7 +105,32 @@ export function loadVideo(url: string, signal?: AbortSignal): Promise<HTMLVideoE
   });
 }
 
+/** 길이가 Infinity인 영상의 실제 길이를 알아냅니다(최대 5초 기다림). */
+function resolveDuration(video: HTMLVideoElement): Promise<void> {
+  return new Promise(resolve => {
+    const done = () => {
+      clearTimeout(timer);
+      video.removeEventListener("durationchange", check);
+      video.removeEventListener("timeupdate", check);
+      video.currentTime = 0;
+      resolve();
+    };
+    const check = () => {
+      if (Number.isFinite(video.duration)) done();
+    };
+    const timer = setTimeout(done, 5000);
+    video.addEventListener("durationchange", check);
+    video.addEventListener("timeupdate", check);
+    video.currentTime = 1e7;
+  });
+}
+
 export function seek(video: HTMLVideoElement, time: number): Promise<void> {
+  // 길이를 아직 모르는 영상(NaN·Infinity)에서 계산한 위치는 숫자가 아닐 수 있어 그대로 넣으면 오류가 납니다
+  // ("Failed to set the 'currentTime' property … non-finite"). 이때는 처음으로, 길이를 알면 그 안으로 맞춥니다.
+  if (!Number.isFinite(time)) time = 0;
+  if (Number.isFinite(video.duration) && video.duration > 0) time = Math.min(time, Math.max(0, video.duration - 0.05));
+  time = Math.max(0, time);
   return new Promise(resolve => {
     if (Math.abs(video.currentTime - time) < 0.01 && video.readyState >= 2) return resolve();
     const done = () => {
@@ -157,6 +195,8 @@ export async function analyzeVideo(
   // 줄·칸마다 가장 밝았던 밝기 — 끝까지 어두운 가장자리는 검은 띠로 봅니다.
   const rowPeak = new Float32Array(H);
   const colPeak = new Float32Array(W);
+  const rowSum = new Float32Array(H);
+  const colSum = new Float32Array(W);
   for (let i = 0; i < times.length; i++) {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
     await seek(video, times[i]);
@@ -173,8 +213,8 @@ export async function analyzeVideo(
     let sumL2 = 0;
     let sumS = 0;
     let edge = 0;
-    const rowSum = new Float32Array(H);
-    const colSum = new Float32Array(W);
+    rowSum.fill(0);
+    colSum.fill(0);
     for (let p = 0, j = 0; p < pixels.length; p += 4, j++) {
       const r = pixels[p] / 255;
       const g = pixels[p + 1] / 255;
