@@ -107,7 +107,9 @@ export function parseRedditSearch(data: any, helper: string | null, offset = 0):
   const posts: any[] = (data?.data?.children ?? []).map((child: any) => child?.data).filter(Boolean);
   const sources: SourceVideo[] = [];
   posts.forEach((post, i) => {
-    if (post.over_18 || typeof post.permalink !== "string") return;
+    // 성인 게시물도 버리지 않고 표시해 둡니다 — 주제의 검열 비율을 계산할 때 씁니다.
+    if (typeof post.permalink !== "string") return;
+    const nsfw = Boolean(post.over_18);
     const relevance = 3.9 + offset - i * 0.05;
     const title = String(post.title ?? "제목 없음").slice(0, 200);
     const video = post.secure_media?.reddit_video ?? post.media?.reddit_video;
@@ -135,12 +137,13 @@ export function parseRedditSearch(data: any, helper: string | null, offset = 0):
         duration,
         bytes: null,
         relevance,
+        nsfw,
       });
       return;
     }
     // Reddit에서 공유된 YouTube 링크
     const id = helper ? youtubeId(String(post.url_overridden_by_dest ?? post.url ?? "")) : null;
-    if (id && helper) sources.push(youtubeSource(id, title, `r/${post.subreddit ?? "?"}`, null, null, helper, relevance - 0.1));
+    if (id && helper) sources.push({ ...youtubeSource(id, title, `r/${post.subreddit ?? "?"}`, null, null, helper, relevance - 0.1), nsfw });
   });
   return sources;
 }

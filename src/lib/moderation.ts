@@ -18,8 +18,8 @@ interface Rule {
 const RULES: Rule[] = [
   {
     category: "성적",
-    ko: ["섹스", "야동", "포르노", "음란", "자위", "성인영상", "성인방송", "몰카", "야짤", "보지털", "자지털", "질싸", "펠라", "애널", "오나홀", "딸딸이", "가슴노출", "노출방송", "벗방", "조건만남", "성매매", "원조교제", "ㅅㅅ"],
-    en: ["porn", "porno", "pornhub", "xvideos", "xxx", "sex", "sexy", "nude", "nudes", "nudity", "naked", "nsfw", "hentai", "onlyfans", "boobs", "pussy", "blowjob", "handjob", "cumshot", "milf", "orgasm", "fetish", "bdsm", "stripper", "striptease", "erotic", "camgirl", "gonewild", "r34", "rule34"],
+    ko: ["섹스", "야동", "포르노", "성인배우", "av배우", "성인비디오", "음란", "자위", "성인영상", "성인방송", "몰카", "야짤", "보지털", "자지털", "질싸", "펠라", "애널", "오나홀", "딸딸이", "가슴노출", "노출방송", "벗방", "조건만남", "성매매", "원조교제", "ㅅㅅ"],
+    en: ["porn", "porno", "pornographic", "pornography", "pornstar", "porn star", "adult film", "adult video", "pornhub", "xvideos", "xxx", "sex", "sexy", "nude", "nudes", "nudity", "naked", "nsfw", "hentai", "onlyfans", "boobs", "pussy", "blowjob", "handjob", "cumshot", "milf", "orgasm", "fetish", "bdsm", "stripper", "striptease", "erotic", "camgirl", "gonewild", "r34", "rule34"],
   },
   {
     category: "욕설·혐오",
@@ -101,7 +101,31 @@ export function checkUserInput(topic: string, features: string): string | null {
   const hits = [...findBlockedWords(topic), ...findBlockedWords(features)];
   if (!hits.length) return null;
   const categories = [...new Set(hits.map(h => h.category))].join(", ");
-  return `부적절한 단어(${categories})가 들어 있어 에딧을 만들 수 없어요. 해당 단어를 빼고 다시 입력해 주세요.`;
+  return `생성 불가 — 부적절한 단어(${categories})가 들어 있어요. 해당 단어를 빼고 다시 입력해 주세요.`;
+}
+
+// ---------------------------------------------------------------------------
+// 주제 단위 차단: 주제 자체나, 그 주제로 찾은 영상 상당수가 검열 대상이면 아예 만들지 않습니다.
+
+/** 생성 자체를 막는 오류 (화면에 "생성 불가"로 표시) */
+export class GenerationBlockedError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = "GenerationBlockedError";
+  }
+}
+
+/** 찾은 영상 중 이 비율 이상이 검열 대상이면 주제를 막습니다(우연한 1개는 봐주도록 최소 2개). */
+export const CENSOR_RATIO = 0.3;
+export const CENSOR_MIN = 2;
+
+export function shouldBlockTopic(censored: number, total: number): boolean {
+  return total > 0 && censored >= CENSOR_MIN && censored / total >= CENSOR_RATIO;
+}
+
+/** 해석된 주제(영어 이름, Wikidata 설명)에 금지어가 있는지 — 예: 설명이 "pornographic actress"인 인물 */
+export function isTopicAllowed(info: { query: string; label: string; englishLabel: string | null; description: string | null }) {
+  return isTextAllowed(info.query, info.label, info.englishLabel, info.description);
 }
 
 // ---------------------------------------------------------------------------

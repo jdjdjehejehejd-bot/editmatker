@@ -2,7 +2,7 @@
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
 import { LIMITS } from "./device";
-import { checkUserInput, isTextAllowed, preloadClassifier, screenFrames } from "./moderation";
+import { checkUserInput, GenerationBlockedError, isTextAllowed, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
@@ -72,13 +72,16 @@ const MAX_TOTAL_SOURCES = 8;
 export async function runPipeline(input: PipelineInput, events: PipelineEvents, signal: AbortSignal): Promise<PipelineResult> {
   // 검열: 부적절한 단어가 있으면 시작하지 않습니다.
   const blocked = checkUserInput(input.topic, input.features);
-  if (blocked) throw new Error(blocked);
+  if (blocked) throw new GenerationBlockedError(blocked);
   const style = parseStyle(input.features);
   const specs = parseTopicInput(input.topic);
   if (!specs.length) throw new Error("주제를 입력해 주세요.");
 
   events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal)));
+  // 검열: 주제가 가리키는 대상(영어 이름, 설명)이 부적절하면 생성하지 않습니다.
+  const badTopic = infos.find(info => !isTopicAllowed(info));
+  if (badTopic) throw new GenerationBlockedError(`생성 불가 — 주제 "${badTopic.query}"는 검열 대상이에요.`);
 
   const where = input.licenseMode === "any" ? (input.helper ? "YouTube·Reddit" : "Reddit") : "Wikimedia Commons·Internet Archive";
   const queriesFor = (info: TopicInfo) =>
@@ -93,13 +96,20 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const claimed = new Set<string>();
   const censored: string[] = [];
   const topics: TopicResult[] = infos.map((info, i) => {
+    // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
+    const flagged = found[i].sources.filter(source => source.nsfw || !isTextAllowed(source.title, source.author, source.tags));
+    // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
+    if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
+      const percent = Math.round((flagged.length / found[i].sources.length) * 100);
+      throw new GenerationBlockedError(`생성 불가 — "${info.query}"로 찾은 영상의 ${percent}%(${flagged.length}/${found[i].sources.length}개)가 검열 대상이에요.`);
+    }
+    const flaggedIds = new Set(flagged.map(source => source.id));
     const candidates = found[i].sources.filter(source => {
       if (claimed.has(source.id)) return false;
-      // 검열: 제목·채널·분류에 금지어가 있는 영상은 받지 않습니다.
-      if (!isTextAllowed(source.title, source.author, source.tags)) {
+      if (flaggedIds.has(source.id)) {
         claimed.add(source.id);
         censored.push(source.id);
-        events.skipped(source, "부적절한 단어가 있어 제외했어요");
+        if (!source.nsfw) events.skipped(source, "부적절한 단어가 있어 제외했어요");
         return false;
       }
       return true;
@@ -133,6 +143,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   const loaded: LoadedSource[] = [];
   const loadedBy = new Map<TopicResult, LoadedSource[]>(active.map(t => [t, []]));
+  // 장면 검열 결과(검사한 수, 걸린 수)를 주제별로 셉니다.
+  const screening = new Map<TopicResult, { checked: number; blocked: number }>(active.map(t => [t, { checked: 0, blocked: 0 }]));
   const cursor = new Map<TopicResult, number>(active.map(t => [t, 0]));
 
   const tryNext = async (topic: TopicResult, perSource: number): Promise<boolean> => {
@@ -153,7 +165,16 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           events.step("analyze", `${candidate.title} 장면 검열 중`);
           const verdict = await screenFrames(analysis.keyframes);
           analysis.keyframes = [];
-          if (verdict.blocked) throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
+          const tally = screening.get(topic)!;
+          tally.checked++;
+          if (verdict.blocked) {
+            tally.blocked++;
+            // 받아 본 영상 중 상당수에서 부적절한 장면이 나오면 주제 자체를 막습니다.
+            if (shouldBlockTopic(tally.blocked, tally.checked)) {
+              throw new GenerationBlockedError(`생성 불가 — "${topic.info.query}" 영상 ${tally.checked}개 중 ${tally.blocked}개에서 부적절한 장면이 감지됐어요.`);
+            }
+            throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
+          }
           const scores = scoreSamples(analysis.samples, style.weights);
           const length = Math.min(highlightLength, analysis.duration * 0.5);
           const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
@@ -168,7 +189,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           throw error;
         }
       } catch (error) {
-        if (signal.aborted) throw error;
+        if (signal.aborted || error instanceof GenerationBlockedError) throw error;
         const reason = describeError(error);
         failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
         events.skipped(candidate, reason);

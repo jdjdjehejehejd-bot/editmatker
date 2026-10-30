@@ -47,13 +47,16 @@ describe("parseRedditSearch", () => {
 
   it("도우미가 있으면 Reddit 영상과 공유된 YouTube 링크를 모두 도우미로 받는다", () => {
     const sources = parseRedditSearch(data, helper);
-    expect(sources.map(s => s.id)).toEqual(["reddit:t3_a", "youtube:xyz789"]);
+    // 성인 게시물은 nsfw로 표시만 해 두고(검열 비율 계산용), 실제로는 받지 않는다
+    expect(sources.map(s => s.id)).toEqual(["reddit:t3_a", "reddit:t3_b", "youtube:xyz789"]);
+    expect(sources.find(s => s.id === "reddit:t3_b")?.nsfw).toBe(true);
+    expect(sources.find(s => s.id === "reddit:t3_a")?.nsfw).toBe(false);
     expect(sources[0].mediaUrl).toBe(`${helper}/api/media?url=${encodeURIComponent("https://www.reddit.com/r/soccer/comments/a/x/")}`);
     expect(sources[0].author).toBe("u/fan · r/soccer");
   });
 
   it("도우미가 없으면 Reddit 영상의 fallback 파일만 쓴다", () => {
-    const sources = parseRedditSearch(data, null);
+    const sources = parseRedditSearch(data, null).filter(s => !s.nsfw);
     expect(sources.map(s => s.id)).toEqual(["reddit:t3_a"]);
     expect(sources[0].mediaUrl).toBe("https://v.redd.it/a/DASH_480.mp4");
     expect(sources[0].fallbackUrl).toBe(`https://editmatker.vercel.app/api/media?url=${encodeURIComponent("https://v.redd.it/a/DASH_480.mp4")}`);
