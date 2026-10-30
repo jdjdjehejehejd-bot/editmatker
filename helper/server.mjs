@@ -101,7 +101,7 @@ async function searchYouTube(query, limit) {
 
 async function searchReddit(query, limit) {
   const url = new URL("https://www.reddit.com/search.json");
-  url.search = new URLSearchParams({ q: query, sort: "relevance", t: "all", type: "link", limit: String(limit), raw_json: "1" }).toString();
+  url.search = new URLSearchParams({ q: query, sort: "relevance", t: "all", type: "link", limit: String(limit), raw_json: "1", include_over_18: "off" }).toString();
   const response = await fetch(url, { headers: { "User-Agent": USER_AGENT }, signal: AbortSignal.timeout(20_000) });
   if (!response.ok) throw new Error(`Reddit 응답 오류 (${response.status})`);
   return response.json();

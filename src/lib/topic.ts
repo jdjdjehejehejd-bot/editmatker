@@ -2,6 +2,8 @@
 // Wikidata·Wikipedia(키 없이 CORS 허용)로 주제의 영어 이름, 다른 이름(별칭), 관련 주제를 찾아
 // 입력값 하나만이 아니라 여러 검색어로 영상을 찾게 합니다.
 
+import { isTextAllowed } from "./moderation";
+
 export interface TopicInfo {
   query: string;
   label: string;
@@ -155,8 +157,9 @@ export async function resolveTopic(query: string, signal?: AbortSignal): Promise
       description: entity?.descriptions?.ko?.value ?? entity?.descriptions?.en?.value ?? null,
       commonsCategory: claimValues("P373")[0] ?? null,
       wikidataVideos: claimValues("P10"),
-      aliases: pickAliases(entity, [query, label, englishLabel ?? ""]),
-      related,
+      // 별칭·관련 주제에 금지어가 섞여 있으면 검색어로 쓰지 않습니다.
+      aliases: pickAliases(entity, [query, label, englishLabel ?? ""]).filter(alias => isTextAllowed(alias)),
+      related: related.filter(item => isTextAllowed(item)),
     };
   } catch (error) {
     if (signal?.aborted) throw error;

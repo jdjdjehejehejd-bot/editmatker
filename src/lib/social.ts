@@ -207,7 +207,7 @@ async function searchRedditOnce(query: SearchQuery, helper: string | null, signa
   if (helper) {
     data = await fetchJson(`${helper}/api/reddit/search?q=${encodeURIComponent(q)}&limit=50`, signal);
   } else {
-    const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "50", raw_json: "1" });
+    const params = new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: "50", raw_json: "1", include_over_18: "off" });
     try {
       data = await fetchJson(`https://www.reddit.com/search.json?${params}`, signal);
     } catch (direct) {

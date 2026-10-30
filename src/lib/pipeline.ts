@@ -2,6 +2,7 @@
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
 import { LIMITS } from "./device";
+import { checkUserInput, isTextAllowed, preloadClassifier, screenFrames } from "./moderation";
 import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
@@ -69,6 +70,9 @@ export interface PipelineEvents {
 const MAX_TOTAL_SOURCES = 8;
 
 export async function runPipeline(input: PipelineInput, events: PipelineEvents, signal: AbortSignal): Promise<PipelineResult> {
+  // 검열: 부적절한 단어가 있으면 시작하지 않습니다.
+  const blocked = checkUserInput(input.topic, input.features);
+  if (blocked) throw new Error(blocked);
   const style = parseStyle(input.features);
   const specs = parseTopicInput(input.topic);
   if (!specs.length) throw new Error("주제를 입력해 주세요.");
@@ -87,8 +91,19 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   // 여러 주제에 같은 영상이 걸리면 먼저 나온 주제에만 둡니다.
   const claimed = new Set<string>();
+  const censored: string[] = [];
   const topics: TopicResult[] = infos.map((info, i) => {
-    const candidates = found[i].sources.filter(source => !claimed.has(source.id));
+    const candidates = found[i].sources.filter(source => {
+      if (claimed.has(source.id)) return false;
+      // 검열: 제목·채널·분류에 금지어가 있는 영상은 받지 않습니다.
+      if (!isTextAllowed(source.title, source.author, source.tags)) {
+        claimed.add(source.id);
+        censored.push(source.id);
+        events.skipped(source, "부적절한 단어가 있어 제외했어요");
+        return false;
+      }
+      return true;
+    });
     candidates.forEach(source => claimed.add(source.id));
     return { info, weight: specs[i].weight, queries: groups[i].queries, candidates, reports: found[i].reports };
   });
@@ -97,9 +112,13 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   if (!active.length) {
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
     const details = topics.map(t => (topics.length > 1 ? `[${t.info.label}]\n` : "") + summarizeReports(t.reports)).join("\n\n");
-    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.\n\n${details}`);
+    const censorNote = censored.length ? `\n\n검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외` : "";
+    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.\n\n${details}${censorNote}`);
   }
   const failures: string[] = topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`);
+  if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
+  // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다.
+  preloadClassifier();
 
   // 음악 템포가 정해져야 하이라이트 길이를 정할 수 있습니다.
   const userMusic = input.musicFile ? await prepareUserMusic(input.musicFile, input.seconds) : null;
@@ -130,6 +149,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         try {
           events.step("analyze", `${candidate.title} 장면 분석 중`, 0);
           const analysis = await analyzeVideo(blob, url, ratio => events.step("analyze", `${candidate.title} 장면 분석 중`, ratio), signal, LIMITS.analysisSamples);
+          // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다.
+          events.step("analyze", `${candidate.title} 장면 검열 중`);
+          const verdict = await screenFrames(analysis.keyframes);
+          analysis.keyframes = [];
+          if (verdict.blocked) throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
           const scores = scoreSamples(analysis.samples, style.weights);
           const length = Math.min(highlightLength, analysis.duration * 0.5);
           const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
