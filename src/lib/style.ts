@@ -18,6 +18,24 @@ export interface EditStyle {
   /** 소스 검색에 덧붙일 영어 키워드 */
   searchHints: string[];
   label: string;
+  /** 특징에 "120bpm"처럼 템포를 직접 적었는지 */
+  bpmExplicit?: boolean;
+}
+
+/** 배경음악 스타일 — auto면 편집 분위기를 따라갑니다 */
+export type MusicStyle = "auto" | Mood;
+
+export const MUSIC_STYLE_LABEL: Record<MusicStyle, string> = {
+  auto: "자동 (분위기 따라)",
+  hype: "하이프 · 트랩",
+  cinematic: "시네마틱 · 웅장",
+  emotional: "감성 · 피아노",
+  retro: "레트로 · 신스웨이브",
+};
+
+/** 음악 스타일별 기본 템포 */
+export function defaultBpm(mood: Mood): number {
+  return MOOD_PRESETS[mood].bpm;
 }
 
 const MOOD_KEYWORDS: Record<Mood, RegExp> = {
@@ -138,6 +156,7 @@ export function parseStyle(features: string): EditStyle {
   return {
     mood,
     bpm,
+    bpmExplicit: Boolean(bpmMatch),
     grade,
     effects,
     cutBeats: preset.cutBeats,

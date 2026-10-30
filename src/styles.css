@@ -111,6 +111,11 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .segmented button:hover:not(.on) { color: var(--ink); }
 .segmented button.on { background: #fff; color: var(--ink); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.12); }
 
+.select {
+  width: 100%; appearance: none; -webkit-appearance: none; background: var(--soft) url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='8'%3E%3Cpath d='M1 1l5 5 5-5' fill='none' stroke='%23262626' stroke-width='1.6'/%3E%3C/svg%3E") no-repeat right 12px center;
+  border: 1px solid var(--line-soft); border-radius: 8px; padding: 10px 34px 10px 12px; font: inherit; font-size: 13px; color: var(--ink); cursor: pointer;
+}
+.select:disabled { opacity: 0.5; cursor: not-allowed; }
 .file { display: flex; flex-direction: column; gap: 4px; }
 .file input { font-size: 12px; max-width: 100%; color: var(--muted); }
 .file input::file-selector-button { margin-right: 8px; border: 0; background: var(--soft); border-radius: 8px; padding: 7px 11px; font: inherit; font-size: 12px; font-weight: 600; color: var(--ink); cursor: pointer; }

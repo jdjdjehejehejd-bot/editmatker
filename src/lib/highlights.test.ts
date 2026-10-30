@@ -43,3 +43,13 @@ describe("highlights", () => {
     expect(scores[5]).toBeLessThan(scores[4] * 0.5);
   });
 });
+
+describe("인물 주제", () => {
+  it("사람이 크게 보이는 순간의 점수를 높인다", () => {
+    const samples = makeSamples(10, 1, []).map((s, i) => ({ ...s, presence: i === 6 ? 0.4 : 0.02 }));
+    const plain = scoreSamples(samples, weights);
+    const person = scoreSamples(samples, weights, 0.6);
+    expect(plain[6]).toBeCloseTo(plain[5]);
+    expect(person[6]).toBeGreaterThan(person[5]);
+  });
+});

@@ -3,6 +3,7 @@
 
 import type { Aspect } from "./render";
 import type { LicenseMode } from "./sources";
+import type { MusicStyle } from "./style";
 
 export interface Preset {
   id: string;
@@ -13,6 +14,8 @@ export interface Preset {
   aspect: Aspect;
   sourceCount: number;
   licenseMode: LicenseMode;
+  /** 배경음악 스타일 (예전 프리셋에는 없으므로 선택 사항) */
+  musicStyle?: MusicStyle;
   /** 기본 제공 프리셋은 지울 수 없습니다 */
   builtin?: boolean;
 }
@@ -23,6 +26,7 @@ const STORAGE_KEY = "editmatker.presets.v1";
 export const MAX_PRESETS = 30;
 const ASPECTS: Aspect[] = ["9:16", "16:9", "1:1"];
 const SECONDS = [15, 30, 45, 60];
+const MUSIC_STYLES: MusicStyle[] = ["auto", "hype", "cinematic", "emotional", "retro"];
 
 const base = { seconds: 30, aspect: "9:16" as Aspect, sourceCount: 4, licenseMode: "any" as LicenseMode, builtin: true };
 export const BUILTIN_PRESETS: Preset[] = [
@@ -47,6 +51,7 @@ export function sanitizePreset(value: any): Preset | null {
     aspect: ASPECTS.includes(value.aspect) ? value.aspect : "9:16",
     sourceCount: Number.isInteger(value.sourceCount) && value.sourceCount >= 2 && value.sourceCount <= 8 ? value.sourceCount : 4,
     licenseMode: value.licenseMode === "reusable" ? "reusable" : "any",
+    musicStyle: MUSIC_STYLES.includes(value.musicStyle) ? value.musicStyle : "auto",
   };
 }
 
@@ -85,7 +90,8 @@ export function matchesPreset(preset: Preset, settings: PresetSettings) {
     preset.seconds === settings.seconds &&
     preset.aspect === settings.aspect &&
     preset.sourceCount === settings.sourceCount &&
-    preset.licenseMode === settings.licenseMode
+    preset.licenseMode === settings.licenseMode &&
+    (preset.musicStyle ?? "auto") === (settings.musicStyle ?? "auto")
   );
 }
 

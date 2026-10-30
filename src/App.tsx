@@ -8,7 +8,7 @@ import { BUILTIN_PRESETS, loadPresets, matchesPreset, savePresets, upsertPreset,
 import { parseTopicInput, type TopicSpec } from "./lib/topic";
 import { describeProfile } from "./lib/learn";
 import type { LicenseMode, SourceVideo } from "./lib/sources";
-import { EFFECT_LABEL, GRADE_LABEL, parseStyle, type EditStyle } from "./lib/style";
+import { EFFECT_LABEL, GRADE_LABEL, MUSIC_STYLE_LABEL, parseStyle, type EditStyle, type MusicStyle } from "./lib/style";
 
 const STEPS: { id: StepId; label: string }[] = [
   { id: "topic", label: "주제 해석" },
@@ -31,6 +31,7 @@ interface RunSnapshot {
   style: EditStyle;
   aspect: Aspect;
   hasMusic: boolean;
+  musicStyle: MusicStyle;
 }
 
 export default function App() {
@@ -41,6 +42,7 @@ export default function App() {
   const [sourceCount, setSourceCount] = useState(LIMITS.defaultSources);
   const [musicFile, setMusicFile] = useState<File | null>(null);
   const [learnOnline, setLearnOnline] = useState(false);
+  const [musicStyle, setMusicStyle] = useState<MusicStyle>("auto");
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [licenseMode, setLicenseMode] = useState<LicenseMode>("any");
   const [presets, setPresets] = useState<Preset[]>(() => loadPresets());
@@ -85,9 +87,9 @@ export default function App() {
   const blockedInput = useMemo(() => checkUserInput(topic, features), [topic, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
-  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode };
+  const currentSettings: PresetSettings = { topic, features, seconds, aspect, sourceCount, licenseMode, musicStyle };
   // 만들기를 시작한 뒤로는 그때의 입력(run)을 보여 주고, 아직 만든 적이 없으면 지금 입력을 미리 보여 줍니다.
-  const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile) } : run!;
+  const shown: RunSnapshot = status === "idle" && !run ? { specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle } : run!;
   const [width, height] = ASPECT_SIZE[shown.aspect];
 
   const savePreset = () => {
@@ -114,6 +116,7 @@ export default function App() {
     setAspect(preset.aspect);
     setSourceCount(Math.min(preset.sourceCount, LIMITS.maxSources));
     setLicenseMode(preset.licenseMode);
+    setMusicStyle(preset.musicStyle ?? "auto");
   };
 
   const [helper, setHelper] = useState<HelperStatus>({ base: null, ytDlp: null });
@@ -154,14 +157,14 @@ export default function App() {
     // 버튼을 누른 이 순간에 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
     const audio = unlockAudio();
     const releaseScreen = await keepScreenOn();
-    setRun({ specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile) });
+    setRun({ specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle });
     setStatus("running");
     stageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, licenseMode, learnOnline, referenceFiles, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -363,9 +366,16 @@ export default function App() {
               </label>
               <label className="field">
                 <span>배경음악</span>
+                <select className="select" value={musicStyle} onChange={e => setMusicStyle(e.target.value as MusicStyle)} disabled={Boolean(musicFile)} aria-label="배경음악 스타일">
+                  {(Object.keys(MUSIC_STYLE_LABEL) as MusicStyle[]).map(key => (
+                    <option key={key} value={key}>
+                      {MUSIC_STYLE_LABEL[key]}
+                    </option>
+                  ))}
+                </select>
                 <div className="file">
                   <input type="file" accept="audio/*" onChange={e => setMusicFile(e.target.files?.[0] ?? null)} />
-                  <small>{musicFile ? musicFile.name : "비워 두면 자동 작곡"}</small>
+                  <small>{musicFile ? `${musicFile.name} (내 음악 사용)` : "또는 내 음악 파일 — 넣으면 그 음악의 템포에 맞춰요"}</small>
                 </div>
               </label>
             </div>
@@ -445,7 +455,7 @@ export default function App() {
               </span>
               <div>
                 <strong>{reelTitle}</strong>
-                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${shown.style.label} · ${shown.hasMusic ? "내 음악" : "자동 작곡 음악"}`}</small>
+                <small>{result ? `${result.plan.segments.length}컷 · ${result.plan.bpm} BPM · ${GRADE_LABEL[result.style.grade]}` : `${shown.style.label} · ${shown.hasMusic ? "내 음악" : shown.musicStyle === "auto" ? "자동 작곡 음악" : `${MUSIC_STYLE_LABEL[shown.musicStyle]} 음악`}`}</small>
               </div>
               <span className="more" aria-hidden>
                 <MoreIcon />

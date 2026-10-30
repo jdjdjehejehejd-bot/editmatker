@@ -1,6 +1,8 @@
 // 편집 계획을 캔버스에 실시간으로 그리고 MediaRecorder로 영상 파일을 만듭니다.
 
 import { createHiddenVideo, disposeVideo, seek } from "./analyze";
+import { cropOffset, focusAt, smoothTrack, type FocusPoint } from "./framing";
+import type { FrameSample } from "./highlights";
 import type { EditPlan, Segment } from "./plan";
 import type { EditStyle, Grade } from "./style";
 
@@ -45,6 +47,8 @@ const GRADE_TINT: Record<Grade, [GlobalCompositeOperation, string][]> = {
 export interface RenderSource {
   id: string;
   url: string;
+  /** 분석 결과가 있으면 관심 지점(사람·움직임)을 따라 화면을 맞춥니다 */
+  analysis?: { samples: FrameSample[] };
 }
 
 export interface RenderOptions {
@@ -117,6 +121,18 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   vignette.addColorStop(0, "rgba(0,0,0,0)");
   vignette.addColorStop(1, "rgba(0,0,0,0.55)");
   const urls = new Map(options.sources.map(s => [s.id, s.url]));
+  // 자동 리프레이밍: 영상마다 관심 지점 경로를 부드럽게 만들어 둡니다(장면 전환을 넘어서 섞이지 않게 컷마다 따로).
+  const tracks = new Map<string, FocusPoint[]>(
+    options.sources.map(source => {
+      const samples = source.analysis?.samples ?? [];
+      const shots: FocusPoint[][] = [[]];
+      for (const s of samples) {
+        if (s.cut && shots[shots.length - 1].length) shots.push([]);
+        if (s.focusX !== undefined && s.focusY !== undefined) shots[shots.length - 1].push({ t: s.t, x: s.focusX, y: s.focusY });
+      }
+      return [source.id, shots.flatMap(shot => smoothTrack(shot))];
+    })
+  );
   const beat = 60 / plan.bpm;
   const total = plan.duration + CREDIT_SECONDS;
   const font = `"Pretendard", "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif`;
@@ -210,8 +226,10 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     if (supportsFilter) ctx.filter = GRADE_FILTER[style.grade];
     ctx.globalAlpha = alpha;
     if (video.readyState >= 2) {
-      const x = (W - w) / 2 + dx;
-      const y = (H - h) / 2 + dy;
+      // 가운데가 아니라 관심 지점(사람·움직임)이 화면 가운데에 오도록 자릅니다.
+      const focus = focusAt(tracks.get(seg.sourceId) ?? [], video.currentTime);
+      const x = cropOffset(focus.x, w, W) + dx;
+      const y = cropOffset(focus.y, h, H) + dy;
       ctx.drawImage(video, x, y, w, h);
       // 휩: 컷 직후 가로로 번지는 잔상(모션 블러)
       if (seg.transition === "whip" && local < WHIP_SECONDS) {

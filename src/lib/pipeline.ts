@@ -12,7 +12,7 @@ import { describeError, downloadSource, findSources, REASON, summarizeReports, r
 import { applyProfile, buildProfile, describeProfile, type ReferenceAnalysis, type StyleProfile } from "./learn";
 import { analyzeReference } from "./reference";
 import { searchReferenceEdits } from "./social";
-import { parseStyle, type EditStyle } from "./style";
+import { defaultBpm, parseStyle, type EditStyle, type Mood, type MusicStyle } from "./style";
 
 export type StepId = "topic" | "search" | "learn" | "download" | "analyze" | "plan" | "render";
 
@@ -39,6 +39,8 @@ export interface PipelineInput {
   learnOnline: boolean;
   /** 사용자가 올린 참고 에딧 (최대 3개) */
   referenceFiles: File[];
+  /** 자동 작곡 배경음악 스타일 (내 음악 파일을 넣으면 쓰지 않음) */
+  musicStyle?: MusicStyle;
 }
 
 export interface TopicResult {
@@ -191,6 +193,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   style = applyProfile(style, profile);
 
   const userMusic = input.musicFile ? await prepareUserMusic(input.musicFile, input.seconds) : null;
+  // 배경음악 스타일을 고르면 그 장르로 작곡하고, 템포를 직접 정하지 않았으면 장르의 기본 템포로 컷도 맞춥니다.
+  const musicMood: Mood = !input.musicStyle || input.musicStyle === "auto" ? style.mood : input.musicStyle;
+  if (!userMusic && musicMood !== style.mood && !style.bpmExplicit && !profile?.bpm) style = { ...style, bpm: defaultBpm(musicMood) };
   const bpm = userMusic?.bpm ?? style.bpm;
   const highlightLength = requiredHighlightLength(style, bpm);
   const approxCuts = Math.ceil(input.seconds / ((60 / bpm) * 2));
@@ -296,7 +301,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           }
           throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
         }
-        const scores = scoreSamples(analysis.samples, style.weights);
+        // 인물 주제는 그 사람이 크게 보이는 순간을 더 높게 칩니다.
+        const scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
         const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
@@ -376,7 +382,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const music = userMusic
     ? { buffer: userMusic.buffer, offset: userMusic.offset }
     : {
-        buffer: await synthesizeMusic({ mood: style.mood, bpm, duration: plan.duration + CREDIT_SECONDS, dropAt: plan.dropAt, outroAt }),
+        buffer: await synthesizeMusic({ mood: musicMood, bpm, duration: plan.duration + CREDIT_SECONDS, dropAt: plan.dropAt, outroAt }),
         offset: 0,
       };
 
