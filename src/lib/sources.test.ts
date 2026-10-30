@@ -90,14 +90,16 @@ describe("검색 보조", () => {
     const wide = { ...topic, aliases: ["Apollo XI"], related: ["Saturn V", "Neil Armstrong"] };
     const queries = buildCommonsQueries(wide, []);
     expect(queries).toContain('filetype:video "Apollo XI"');
-    expect(queries.at(-1)).toBe('filetype:video "Neil Armstrong"');
+    expect(queries.at(-1)).toBe('filetype:video "Apollo 11" "Neil Armstrong"');
     expect(buildArchiveQuery(wide, [], "any")).toContain('("Apollo 11" OR "Apollo XI")');
-    expect(buildArchiveQuery(wide, [], "any", true)).toContain('("Saturn V" OR "Neil Armstrong")');
+    expect(buildArchiveQuery(wide, [], "any", true)).toContain('("Apollo 11" OR "Apollo XI") AND ("Saturn V" OR "Neil Armstrong")');
   });
 
   it("분류·영어 이름·힌트로 검색어를 만든다", () => {
     const queries = buildCommonsQueries(topic, ["launch"]);
-    expect(queries[0]).toBe('filetype:video incategory:"Apollo 11"');
+    // 분류 검색은 searchCommons가 따로 하고, 이름은 늘 따옴표로 묶는다
+    expect(queries[0]).toBe('filetype:video "Apollo 11" launch');
+    expect(queries.some(q => !q.includes('"'))).toBe(false);
     expect(queries).toContain('filetype:video "Apollo 11" launch');
   });
 

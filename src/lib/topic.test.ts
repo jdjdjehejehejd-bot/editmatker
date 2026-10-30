@@ -35,8 +35,8 @@ describe("expandQueries", () => {
       { q: "Son Heung-min", weight: 0.95, kind: "name" },
       { q: "Sonny", weight: 0.85, kind: "alias" },
       { q: "쏘니", weight: 0.85, kind: "alias" },
-      { q: "Tottenham Hotspur F.C.", weight: 0.6, kind: "related" },
-      { q: "South Korea national football team", weight: 0.6, kind: "related" },
+      { q: "Son Heung-min Tottenham Hotspur F.C.", weight: 0.6, kind: "related" },
+      { q: "Son Heung-min South Korea national football team", weight: 0.6, kind: "related" },
     ]);
   });
 
@@ -120,5 +120,35 @@ describe("여러 주제 입력", () => {
     const { combinedTitle } = await import("./topic");
     expect(combinedTitle(["손흥민"])).toBe("손흥민");
     expect(combinedTitle(["A", "B", "C", "D", "E"])).toBe("A × B × C 외 2");
+  });
+});
+
+describe("관련성 판정", () => {
+  it("영상 정보에 주제 이름이 나와야 관련 있다고 본다", async () => {
+    const { matchesTopic } = await import("./topic");
+    const son: TopicInfo = { query: "손흥민", label: "손흥민", englishLabel: "Son Heung-min", description: null, commonsCategory: null, wikidataVideos: [], aliases: ["Sonny"], related: ["Tottenham Hotspur F.C."] };
+    expect(matchesTopic("손흥민 골 모음", son)).toBe(true);
+    expect(matchesTopic("손 흥민 하이라이트", son)).toBe(true);
+    expect(matchesTopic("SON HEUNG-MIN | All Goals", son)).toBe(true);
+    expect(matchesTopic("Son Heungmin hat-trick", son)).toBe(true);
+    expect(matchesTopic("Heung-min Son interview", son)).toBe(true);
+    expect(matchesTopic("Sonny scores again", son)).toBe(true);
+    // 관련 주제만 나오고 주제 인물은 없는 영상은 뺀다
+    expect(matchesTopic("Tottenham Hotspur stadium tour", son)).toBe(false);
+    expect(matchesTopic("Random football compilation", son)).toBe(false);
+    expect(matchesTopic("Son of a gun", son)).toBe(false);
+
+    const bts: TopicInfo = { query: "BTS", label: "방탄소년단", englishLabel: "BTS", description: null, commonsCategory: null, wikidataVideos: [], aliases: [] };
+    expect(matchesTopic("BTS - Dynamite live", bts)).toBe(true);
+    expect(matchesTopic("방탄소년단 무대", bts)).toBe(true);
+    expect(matchesTopic("Subtitles test", bts)).toBe(false); // 다른 단어 속 'bts'는 무시
+
+    const beyonce: TopicInfo = { query: "Beyoncé", label: "비욘세", englishLabel: "Beyoncé", description: null, commonsCategory: null, wikidataVideos: [] };
+    expect(matchesTopic("Beyonce Coachella", beyonce)).toBe(true);
+  });
+
+  it("관련 주제는 주제 이름과 묶어서 검색한다", () => {
+    const son: TopicInfo = { query: "손흥민", label: "손흥민", englishLabel: "Son Heung-min", description: null, commonsCategory: null, wikidataVideos: [], related: ["Tottenham Hotspur F.C."] };
+    expect(expandQueries(son, []).at(-1)).toEqual({ q: "Son Heung-min Tottenham Hotspur F.C.", weight: 0.6, kind: "related" });
   });
 });

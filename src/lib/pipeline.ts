@@ -7,7 +7,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { CREDIT_SECONDS } from "./render";
-import { allocateSlots, combinedTitle, expandQueries, parseTopicInput } from "./topic";
+import { allocateSlots, combinedTitle, expandQueries, matchesTopic, parseTopicInput } from "./topic";
 import { describeError, downloadSource, findSources, summarizeReports, resolveTopic, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
 import { parseStyle, type EditStyle } from "./style";
 
@@ -95,6 +95,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 여러 주제에 같은 영상이 걸리면 먼저 나온 주제에만 둡니다.
   const claimed = new Set<string>();
   const censored: string[] = [];
+  let irrelevant = 0;
   const topics: TopicResult[] = infos.map((info, i) => {
     // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
     const flagged = found[i].sources.filter(source => source.nsfw || !isTextAllowed(source.title, source.author, source.tags));
@@ -112,6 +113,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         if (!source.nsfw) events.skipped(source, "부적절한 단어가 있어 제외했어요");
         return false;
       }
+      // 관련성: 제목·태그·채널에 주제 이름이 나오는 영상(또는 주제의 Commons 분류·대표 영상)만 씁니다.
+      if (!source.trusted && !matchesTopic([source.title, source.tags, source.author].filter(Boolean).join(" "), info)) {
+        irrelevant++;
+        return false;
+      }
       return true;
     });
     candidates.forEach(source => claimed.add(source.id));
@@ -123,10 +129,13 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
     const details = topics.map(t => (topics.length > 1 ? `[${t.info.label}]\n` : "") + summarizeReports(t.reports)).join("\n\n");
     const censorNote = censored.length ? `\n\n검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외` : "";
-    throw new Error(`${scope}관련 영상을 찾지 못했어요. 주제를 영어 이름이나 더 넓은 키워드로 바꿔 보세요.\n\n${details}${censorNote}`);
+    const relevanceNote = irrelevant ? `\n관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외` : "";
+    const names = topics.map(t => `"${t.info.label}"`).join(", ");
+    throw new Error(`${scope}${names}이(가) 나오는 영상을 찾지 못했어요. 이름을 정확히(또는 영어로) 입력해 보세요.\n\n${details}${censorNote}${relevanceNote}`);
   }
   const failures: string[] = topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`);
   if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
+  if (irrelevant) failures.push(`관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외`);
   // 영상을 받는 동안 장면 검열 모델도 미리 받아 둡니다.
   preloadClassifier();
 
