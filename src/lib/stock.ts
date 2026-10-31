@@ -4,6 +4,7 @@
 
 import { stockRequest, type StockProvider } from "../../api/_stock";
 import { LIMITS } from "./device";
+import { fetchWithTimeout } from "./net";
 import { proxyBase } from "./social";
 import { reject, REASON, type Provider, type SearchStats, type SourceVideo } from "./sources";
 import type { TopicInfo } from "./topic";
@@ -210,13 +211,13 @@ async function fetchStock(provider: StockProvider, q: string, key: string, signa
   if (key && provider !== "mixkit") {
     const direct = stockRequest(provider, q, key);
     try {
-      if (direct) return await read(await fetch(direct.url, { headers: direct.headers, signal }));
+      if (direct) return await read(await fetchWithTimeout(direct.url, { headers: direct.headers, signal }, 12_000));
     } catch (error) {
       if (signal?.aborted) throw error;
     }
   }
   const headers: Record<string, string> = key ? { "X-Api-Key": key } : {};
-  const response = await fetch(`${proxyBase()}/api/stock?${new URLSearchParams({ provider, q })}`, { headers, signal });
+  const response = await fetchWithTimeout(`${proxyBase()}/api/stock?${new URLSearchParams({ provider, q })}`, { headers, signal }, 15_000);
   if (response.status === 501 && !key) missingServerKey.add(provider);
   return read(response);
 }

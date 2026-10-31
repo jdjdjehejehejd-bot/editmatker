@@ -3,6 +3,7 @@
 // 허용되는 라이선스(Commons·Internet Archive·스톡)만으로 좁힐 수 있습니다.
 
 import { LIMITS } from "./device";
+import { fetchWithTimeout, withTimeout } from "./net";
 import { proxyBase, searchReddit, searchYouTube } from "./social";
 import { searchStock, type StockKeys } from "./stock";
 import { topicNames, type TopicInfo } from "./topic";
@@ -83,6 +84,10 @@ export const REASON = {
 
 
 export const MAX_SOURCE_BYTES = 150 * 1024 * 1024;
+/** 출처 하나의 검색 전체 시간 제한 */
+const SEARCH_TIMEOUT_MS = 30_000;
+/** 영상을 받는 도중 이만큼 데이터가 안 오면 포기 */
+const STALL_TIMEOUT_MS = 30_000;
 /** 이 기기에서 실제로 받을 수 있는 크기 (휴대폰은 더 작음) — 화질을 고를 때도 같은 기준을 써야 받다가 실패하지 않습니다. */
 const deviceBytes = () => Math.min(MAX_SOURCE_BYTES, LIMITS.sourceBytes);
 const MIN_DURATION = 3;
@@ -98,7 +103,7 @@ const defaultCanPlay: CanPlay = mime => {
 };
 
 async function getJson(url: string, signal?: AbortSignal): Promise<any> {
-  const response = await fetch(url, { signal });
+  const response = await fetchWithTimeout(url, { signal }, 15_000);
   if (!response.ok) throw new Error(`${new URL(url).hostname} 응답 오류 (${response.status})`);
   return response.json();
 }
@@ -460,7 +465,8 @@ async function searchAllSources(
   const run = async (provider: Provider, search: (stats: SearchStats) => Promise<SourceVideo[]>) => {
     const stats: SearchStats = { scanned: 0 };
     try {
-      const sources = await search(stats);
+      // 한 출처가 응답하지 않아도 다른 출처 결과로 진행하도록 출처마다 시간 제한을 둡니다.
+      const sources = await withTimeout(search(stats), SEARCH_TIMEOUT_MS);
       reports.push({ provider, usable: sources.length, scanned: Math.max(stats.scanned, sources.length), rejected: stats.rejected });
       return sources;
     } catch (error) {
@@ -579,27 +585,60 @@ async function downloadFrom(
   signal: AbortSignal | undefined,
   maxBytes: number
 ): Promise<Blob> {
-  const response = await fetch(url, { signal });
-  if (!response.ok || !response.body) {
-    const detail = (await response.json().catch(() => null))?.error;
-    throw new Error(detail ? `다운로드 실패: ${detail}` : `다운로드 실패 (${response.status})`);
-  }
-  const total = Number(response.headers.get("content-length")) || expectedBytes || 0;
-  if (total > maxBytes) throw new Error("파일이 너무 커서 건너뛰었어요.");
-  const reader = response.body.getReader();
-  const chunks: Uint8Array<ArrayBuffer>[] = [];
-  let received = 0;
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    received += value.byteLength;
-    if (received > maxBytes) {
-      await reader.cancel();
-      throw new Error("파일이 너무 커서 건너뛰었어요.");
+  // 받는 도중 데이터가 한동안 안 오면(서버가 멈춤) 이 영상은 포기하고 다음으로 넘어갑니다.
+  // 첫 응답과 조각을 받을 때마다 시간을 새로 세므로, 느려도 계속 오면 끝까지 받습니다.
+  const controller = new AbortController();
+  const onAbort = () => controller.abort(signal?.reason);
+  if (signal?.aborted) controller.abort(signal.reason);
+  else signal?.addEventListener("abort", onAbort, { once: true });
+  let stalled = false;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const arm = () => {
+    clearTimeout(timer);
+    timer = setTimeout(() => {
+      stalled = true;
+      controller.abort();
+    }, STALL_TIMEOUT_MS);
+  };
+  const stallError = () => new Error(`다운로드 실패: ${STALL_TIMEOUT_MS / 1000}초 동안 응답이 없었어요`);
+  try {
+    arm();
+    let response: Response;
+    try {
+      response = await fetch(url, { signal: controller.signal });
+    } catch (error) {
+      throw stalled ? stallError() : error;
     }
-    chunks.push(value);
-    if (total) onProgress(Math.min(1, received / total));
+    if (!response.ok || !response.body) {
+      const detail = (await response.json().catch(() => null))?.error;
+      throw new Error(detail ? `다운로드 실패: ${detail}` : `다운로드 실패 (${response.status})`);
+    }
+    const total = Number(response.headers.get("content-length")) || expectedBytes || 0;
+    if (total > maxBytes) throw new Error("파일이 너무 커서 건너뛰었어요.");
+    const reader = response.body.getReader();
+    const chunks: Uint8Array<ArrayBuffer>[] = [];
+    let received = 0;
+    for (;;) {
+      arm();
+      let part: ReadableStreamReadResult<Uint8Array<ArrayBuffer>>;
+      try {
+        part = await reader.read();
+      } catch (error) {
+        throw stalled ? stallError() : error;
+      }
+      if (part.done) break;
+      received += part.value.byteLength;
+      if (received > maxBytes) {
+        await reader.cancel();
+        throw new Error("파일이 너무 커서 건너뛰었어요.");
+      }
+      chunks.push(part.value);
+      if (total) onProgress(Math.min(1, received / total));
+    }
+    onProgress(1);
+    return new Blob(chunks, { type: response.headers.get("content-type") ?? "video/mp4" });
+  } finally {
+    clearTimeout(timer);
+    signal?.removeEventListener("abort", onAbort);
   }
-  onProgress(1);
-  return new Blob(chunks, { type: response.headers.get("content-type") ?? "video/mp4" });
 }
