@@ -146,11 +146,18 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   preloadClassifier(policy);
   let specs = parseTopicInput(input.topic);
   const uploads = (input.uploadFiles ?? []).slice(0, MAX_UPLOADS);
-  if (!specs.length && !uploads.length) throw new Error("주제를 입력하거나 편집할 영상을 올려 주세요.");
-  // 주제 없이 영상만 올렸으면 올린 영상(파일 이름 → 장면)을 보고 비슷한 주제를 고릅니다.
+  if (!specs.length && !uploads.length && !input.features.trim()) throw new Error("주제를 입력하거나 편집할 영상을 올려 주세요.");
+  // 주제를 비웠으면 알아서 고릅니다.
+  // 1) 특징·분위기 문장에 나오는 대상(예: "뉴진스 무대 장면 위주로" → 뉴진스)
+  // 2) 영상만 올렸으면 올린 영상(파일 이름 → 장면)
   // 고른 주제로 비슷한 영상을 찾아 섞고("올린 영상만 편집"이면 찾지 않음), 제목·장면 판단·스타일 학습에도 씁니다.
   let inferred: InferredTopic | null = null;
-  if (!specs.length) {
+  if (!specs.length && input.features.trim()) {
+    events.step("topic", "특징·분위기를 보고 주제를 고르는 중");
+    inferred = await topicFromFeatures(input.features, style.keywords ?? [], signal, policy);
+    if (inferred) specs = [{ term: inferred.term, weight: 1 }];
+  }
+  if (!specs.length && uploads.length) {
     events.step("topic", "올린 영상을 보고 비슷한 주제를 고르는 중");
     inferred = await inferTopic(uploads, signal).catch(error => {
       if (signal.aborted) throw error;
@@ -159,6 +166,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     if (inferred && !checkUserInput(inferred.term, "")) specs = [{ term: inferred.term, weight: 1 }];
     else inferred = null;
   }
+  if (!specs.length && !uploads.length) throw new Error("특징·분위기에서 주제를 찾지 못했어요. 주제 칸에 인물·대상을 적거나 편집할 영상을 올려 주세요.");
 
   if (specs.length) events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
@@ -690,6 +698,32 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     return { label: t.info.label, weight: t.weight, used, note };
   });
   return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile), relatedUsed: loaded.filter(s => s.relatedOnly).length, wanted: slots };
+}
+
+/**
+ * 특징·분위기 문장에서 주제를 고릅니다. 문장의 내용 키워드(스타일 낱말·일반적인 말 제외) 가운데
+ * 실제로 적힌 말만 후보로 삼고(번역된 검색 힌트는 제외), 두 글자 이상을 먼저, 앞에 나온 순서대로 Wikidata에서 찾아
+ * 처음 찾아지는 대상을 씁니다. 하나도 찾아지지 않으면 null.
+ */
+async function topicFromFeatures(features: string, keywords: string[], signal: AbortSignal, policy: ModerationOptions): Promise<InferredTopic | null> {
+  const text = features.toLowerCase();
+  const candidates = keywords
+    .filter(word => text.includes(word.toLowerCase()) && !checkUserInput(word, ""))
+    .map((word, index) => ({ word, index }))
+    .sort((a, b) => Number(b.word.length >= 2) - Number(a.word.length >= 2) || a.index - b.index)
+    .slice(0, 3)
+    .map(entry => entry.word);
+  if (!candidates.length) return null;
+  const infos = await Promise.all(
+    candidates.map(word =>
+      resolveTopic(word, signal, policy).catch(error => {
+        if (signal.aborted) throw error;
+        return null;
+      })
+    )
+  );
+  const found = infos.findIndex(info => info && isTopicAllowed(info, policy) && (info.englishLabel || info.description));
+  return found >= 0 ? { term: candidates[found], label: infos[found]!.label, source: "features", confidence: 1 } : null;
 }
 
 /** 참고 에딧(올린 파일 + 인터넷에서 찾은 에딧, 합쳐 최대 3개)을 분석해 스타일 프로필을 만듭니다. 실패해도 생성은 계속합니다. */
