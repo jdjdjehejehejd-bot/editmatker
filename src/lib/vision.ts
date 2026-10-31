@@ -133,6 +133,19 @@ export async function subjectScores(frames: HTMLCanvasElement[], terms: string[]
   return (await classify(frames)).map(probs => subjectProbability(probs, terms));
 }
 
+/**
+ * 장면들의 "상대편과 닮은 정도"와 "말한 대상이 보이는 정도"를 모델 한 번으로 함께 잽니다.
+ * target이 없으면 닮은 정도는, terms가 비면 대상은 건너뜁니다.
+ */
+export async function frameScores(frames: HTMLCanvasElement[], target: ArrayLike<number> | null, terms: string[], similarity: (a: ArrayLike<number>, b: ArrayLike<number>) => number) {
+  if (!frames.length || (!target && !terms.length)) return { sims: undefined, subjects: undefined };
+  const { vectors, probs } = await describeFrames(frames);
+  return {
+    sims: target ? vectors.map(v => similarity(v, target)) : undefined,
+    subjects: terms.length ? probs.map(p => subjectProbability(p, terms)) : undefined,
+  };
+}
+
 /** 장면별 분류 확률(1000개)을 묶음별로 더해 평균 내고, 가장 높은 묶음을 고릅니다. */
 export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic | null {
   if (!frames.length) return null;
@@ -154,18 +167,19 @@ export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic
 // 모델
 
 type Tensor = { data(): Promise<Float32Array>; dispose(): void; shape: number[] };
-type Model = { predict(input: unknown): Tensor };
+type Model = { predict(input: unknown): Tensor | Tensor[] };
 /** 분류 직전(전역 평균 풀링)의 특징 벡터 — 장면이 "어떻게 생겼는지"를 512개 숫자로 */
 const EMBEDDING_LAYER = "global_average_pooling2d_1";
-let model: Promise<{ tf: typeof import("@tensorflow/tfjs"); net: Model; embedder: Model }> | null = null;
+/** 속도: 특징 벡터와 분류 확률을 한 번 돌려 같이 얻는 모델(두 값이 다 필요할 때 장면을 두 번 넣지 않게) */
+let model: Promise<{ tf: typeof import("@tensorflow/tfjs"); both: Model }> | null = null;
 
 function loadModel() {
   model ??= (async () => {
     const tf = await import("@tensorflow/tfjs");
     await tf.ready();
     const layers = await tf.loadLayersModel(MODEL_URL);
-    const embedder = tf.model({ inputs: layers.inputs, outputs: layers.getLayer(EMBEDDING_LAYER).output as never }) as unknown as Model;
-    return { tf, net: layers as unknown as Model, embedder };
+    const both = tf.model({ inputs: layers.inputs, outputs: [layers.getLayer(EMBEDDING_LAYER).output, layers.outputs[0]] as never }) as unknown as Model;
+    return { tf, both };
   })().catch(error => {
     model = null;
     throw error;
@@ -178,17 +192,37 @@ export function preloadVision() {
   void loadModel().catch(() => undefined);
 }
 
+/** 장면들을 한 번(배치)에 모델에 넣어 특징 벡터와 분류 확률을 함께 얻습니다(입력 -1~1). */
+export async function describeFrames(frames: HTMLCanvasElement[]): Promise<{ vectors: Float32Array[]; probs: Float32Array[] }> {
+  if (!frames.length) return { vectors: [], probs: [] };
+  const { tf, both } = await loadModel();
+  const input = tf.tidy(() => tf.stack(frames.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
+  const [embedding, prediction] = both.predict(input) as Tensor[];
+  const split = async (tensor: Tensor) => {
+    const size = tensor.shape[tensor.shape.length - 1];
+    const flat = await tensor.data();
+    tensor.dispose();
+    return frames.map((_, f) => flat.slice(f * size, (f + 1) * size));
+  };
+  const [vectors, raw] = await Promise.all([split(embedding), split(prediction)]);
+  input.dispose();
+  return { vectors, probs: raw.map(toProbabilities) };
+}
+
+/** 출력이 확률이 아니면 softmax로 바꿉니다. */
+function toProbabilities(values: Float32Array): Float32Array {
+  let sum = 0;
+  for (const p of values) sum += p;
+  if (Math.abs(sum - 1) <= 0.05) return values;
+  const max = Math.max(...values);
+  const exp = values.map(v => Math.exp(v - max));
+  const total = exp.reduce((a, b) => a + b, 0);
+  return exp.map(v => v / total);
+}
+
 /** 224×224 장면들의 특징 벡터 (한 번에 배치로). 장면끼리 닮은 정도를 잴 때 씁니다. */
 export async function embed(frames: HTMLCanvasElement[]): Promise<Float32Array[]> {
-  if (!frames.length) return [];
-  const { tf, embedder } = await loadModel();
-  const input = tf.tidy(() => tf.stack(frames.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
-  const output = embedder.predict(input);
-  const size = output.shape[output.shape.length - 1];
-  const flat = await output.data();
-  output.dispose();
-  input.dispose();
-  return frames.map((_, f) => flat.slice(f * size, (f + 1) * size));
+  return (await describeFrames(frames)).vectors;
 }
 
 /** 올린 영상들의 장면 (영상마다 4장면, 가운데 정사각형) */
@@ -234,31 +268,27 @@ export function posterFrame(url: string, timeoutMs = 4000): Promise<HTMLCanvasEl
   });
 }
 
-/** 224×224 장면들을 한 번에(배치로) 분류합니다(입력 -1~1). 출력이 확률이 아니면 softmax로 바꿉니다. */
+/** 224×224 장면들을 한 번에(배치로) 분류합니다. */
 async function classify(frames: HTMLCanvasElement[]): Promise<Float32Array[]> {
-  const { tf, net } = await loadModel();
-  const input = tf.tidy(() => tf.stack(frames.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
-  const output = net.predict(input);
-  const classes = output.shape[output.shape.length - 1];
-  const flat = await output.data();
-  output.dispose();
-  input.dispose();
-  return frames.map((_, f) => {
-    let probs = flat.slice(f * classes, (f + 1) * classes);
-    let sum = 0;
-    for (const p of probs) sum += p;
-    if (Math.abs(sum - 1) > 0.05) {
-      const max = Math.max(...probs);
-      const exp = probs.map(v => Math.exp(v - max));
-      const total = exp.reduce((a, b) => a + b, 0);
-      probs = exp.map(v => v / total);
-    }
-    return probs;
-  });
+  return (await describeFrames(frames)).probs;
 }
 
+/** 속도: 같은 파일의 장면은 한 번만 뽑습니다(주제 고르기와 닮은 정도 재기에서 함께 씀). 파일이 사라지면 같이 지워짐. */
+const grabbed = new WeakMap<File, Promise<HTMLCanvasElement[]>>();
+
 /** 영상에서 고르게 몇 장면을 뽑아 가운데를 정사각형으로 잘라 둡니다. */
-async function grabFrames(file: File, signal?: AbortSignal): Promise<HTMLCanvasElement[]> {
+function grabFrames(file: File, signal?: AbortSignal): Promise<HTMLCanvasElement[]> {
+  let frames = grabbed.get(file);
+  if (!frames) {
+    frames = grabFramesOnce(file, signal);
+    grabbed.set(file, frames);
+    // 중단·실패한 결과는 기억하지 않고 다음에 다시 뽑습니다.
+    frames.catch(() => grabbed.delete(file));
+  }
+  return frames;
+}
+
+async function grabFramesOnce(file: File, signal?: AbortSignal): Promise<HTMLCanvasElement[]> {
   const url = URL.createObjectURL(file);
   let video: HTMLVideoElement | null = null;
   try {
@@ -290,11 +320,7 @@ export async function inferTopic(files: File[], signal?: AbortSignal): Promise<I
   if (fromName) return { term: fromName, label: fromName, source: "filename", confidence: 1 };
   // 장면을 뽑는 동안 모델도 받습니다.
   preloadVision();
-  const frames: HTMLCanvasElement[] = [];
-  for (const file of files.slice(0, 6)) {
-    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    frames.push(...(await grabFrames(file, signal).catch(() => [])));
-  }
+  const frames = await uploadFrames(files, signal);
   if (!frames.length) return null;
   try {
     return topicFromPredictions(await classify(frames));

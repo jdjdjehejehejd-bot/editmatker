@@ -7,7 +7,7 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
-import { embed, inferTopic, posterFrame, subjectScores, uploadFrames, type InferredTopic } from "./vision";
+import { embed, frameScores, inferTopic, posterFrame, uploadFrames, type InferredTopic } from "./vision";
 import { addSimilarity, centroid, cosine, rerankBySimilarity } from "./similarity";
 import { sanitizeWeight, uploadGroupWeight } from "./uploads";
 import { downloadTrack, findFreeMusic, trackCredit, type FreeTrack } from "./freemusic";
@@ -275,19 +275,26 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   if (uploadTopic && searching && online.length) {
     events.step("search", "올린 영상과 닮은 영상을 고르는 중");
     try {
-      uploadProfile = centroid(await embed(await uploadFrames(uploads, signal)));
+      // 속도: 올린 영상 장면 뽑기와 모든 주제의 썸네일 받기를 동시에 하고, 모델은 한 번(배치)만 돌립니다.
+      const tops = online.map(t => t.candidates.slice(0, 12));
+      const [mine, posters] = await Promise.all([
+        uploadFrames(uploads, signal),
+        Promise.all(tops.map(top => Promise.all(top.map(c => (c.poster ? posterFrame(c.poster) : Promise.resolve(null)))))),
+      ]);
+      const readable = posters.map(list => list.map((p, i) => (p ? i : -1)).filter(i => i >= 0));
+      const vectors = await embed([...mine, ...readable.flatMap((idx, t) => idx.map(i => posters[t][i]!))]);
+      uploadProfile = centroid(vectors.slice(0, mine.length));
+      let offset = mine.length;
       const topicVectors: Float32Array[] = [];
-      for (const t of online) {
-        const top = t.candidates.slice(0, 12);
-        const posters = await Promise.all(top.map(c => (c.poster ? posterFrame(c.poster) : Promise.resolve(null))));
-        const readable = posters.map((p, i) => (p ? i : -1)).filter(i => i >= 0);
-        const vectors = await embed(readable.map(i => posters[i]!));
-        topicVectors.push(...vectors);
-        if (!uploadProfile) continue;
+      online.forEach((t, ti) => {
+        const own = vectors.slice(offset, offset + readable[ti].length);
+        offset += readable[ti].length;
+        topicVectors.push(...own);
+        if (!uploadProfile) return;
         const profile = uploadProfile;
-        const similarity = new Map(readable.map((i, k) => [top[i].id, cosine(vectors[k], profile)]));
-        t.candidates = [...rerankBySimilarity(top, c => similarity.get(c.id) ?? null), ...t.candidates.slice(12)];
-      }
+        const similarity = new Map(readable[ti].map((i, k) => [tops[ti][i].id, cosine(own[k], profile)]));
+        t.candidates = [...rerankBySimilarity(tops[ti], c => similarity.get(c.id) ?? null), ...t.candidates.slice(12)];
+      });
       topicProfile = centroid(topicVectors);
     } catch (error) {
       if (signal.aborted) throw error;
@@ -407,10 +414,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       const verdict = await screenFrames(analysis.keyframes, { ...policy, sports: isSportsJob(job) });
       // 주제와 올린 영상을 함께 쓰면: 찾은 영상은 올린 영상과, 올린 영상은 주제(찾은 영상들)와 닮은 장면을 잽니다.
       const target = candidate.file ? topicProfile : uploadProfile;
-      const sims = target && !verdict.blocked ? await embed(analysis.keyframes).then(vectors => vectors.map(v => cosine(v, target)), () => undefined) : undefined;
-      // 특징 문장이 "바다, 무대"처럼 찍힌 대상을 말했으면 그 대상이 보이는 장면을 잽니다.
+      // 특징 문장이 "바다, 무대"처럼 찍힌 대상을 말했으면 그 대상이 보이는 장면도 잽니다.
+      // 속도: 닮은 정도와 대상을 모델 한 번으로 함께 잽니다.
       const terms = style.scene?.subjects ?? [];
-      const subjects = terms.length && !verdict.blocked ? await subjectScores(analysis.keyframes, terms).catch(() => undefined) : undefined;
+      const none = { sims: undefined, subjects: undefined };
+      const { sims, subjects } = verdict.blocked ? none : await frameScores(analysis.keyframes, target, terms, cosine).catch(() => none);
       analysis.keyframes = [];
       return { url, analysis, verdict, sims, subjects };
     } catch (error) {
