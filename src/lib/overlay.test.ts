@@ -6,7 +6,7 @@ describe("오버레이 설정", () => {
   it("예전 값·잘못된 값은 기본값으로", () => {
     expect(sanitizeOverlay(undefined)).toEqual(DEFAULT_OVERLAY);
     const value = sanitizeOverlay({ showTitle: false, title: 7, showCredits: false, texts: [{ text: "안녕", start: -3, duration: 999, position: "side", size: "huge" }, { nope: 1 }] });
-    expect(value).toEqual({ showTitle: false, title: "", showCredits: false, texts: [{ text: "안녕", start: 0, duration: 60, position: "bottom", size: "medium" }] });
+    expect(value).toEqual({ showTitle: false, title: "", subtitle: "", showCredits: false, texts: [{ text: "안녕", start: 0, duration: 60, position: "bottom", size: "medium" }] });
     expect(sanitizeOverlay({ texts: Array.from({ length: 20 }, () => ({ text: "a" })) }).texts).toHaveLength(MAX_TEXTS);
   });
 
@@ -38,5 +38,13 @@ describe("오버레이 설정", () => {
     expect(matchesPreset(preset, settings)).toBe(true);
     expect(matchesPreset(preset, { ...settings, overlay: DEFAULT_OVERLAY })).toBe(false);
     expect(matchesPreset(sanitizePreset({ id: "q", name: "q", ...settings, overlay: undefined })!, { ...settings, overlay: DEFAULT_OVERLAY })).toBe(true);
+  });
+});
+
+describe("부제목", () => {
+  it("기본은 비어 있고(편집 방식이 자동으로 붙지 않음), 직접 쓴 부제목은 저장됨", () => {
+    expect(DEFAULT_OVERLAY.subtitle).toBe("");
+    expect(sanitizeOverlay({ subtitle: "2024 시즌 하이라이트" }).subtitle).toBe("2024 시즌 하이라이트");
+    expect(sanitizeOverlay({ title: "예전 프리셋" }).subtitle).toBe("");
   });
 });

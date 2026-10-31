@@ -331,3 +331,8 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 
 /* 올린 영상 가중치 */
 .pick-list .weight { flex: none; border: 1px solid var(--line); border-radius: 6px; background: #fff; font: inherit; font-size: 12px; font-weight: 600; padding: 2px 4px; color: var(--ink); cursor: pointer; }
+
+/* 부제목 */
+.subtitle-line { display: flex; gap: 6px; align-items: center; }
+.subtitle-line .select { flex: 1; min-width: 0; }
+.subtitle-line .chip { flex: none; white-space: nowrap; }

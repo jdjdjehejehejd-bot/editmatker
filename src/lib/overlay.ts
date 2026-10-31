@@ -18,12 +18,14 @@ export interface OverlaySettings {
   showTitle: boolean;
   /** 직접 입력한 제목 (비우면 주제 이름) */
   title: string;
+  /** 제목 아래 작은 글씨 (비우면 없음). 예전에는 편집 방식이 자동으로 들어갔습니다. */
+  subtitle: string;
   /** 끝에 출처(크레딧) 화면을 넣을지 */
   showCredits: boolean;
   texts: TextOverlay[];
 }
 
-export const DEFAULT_OVERLAY: OverlaySettings = { showTitle: true, title: "", showCredits: true, texts: [] };
+export const DEFAULT_OVERLAY: OverlaySettings = { showTitle: true, title: "", subtitle: "", showCredits: true, texts: [] };
 export const MAX_TEXTS = 8;
 export const MAX_TEXT_LENGTH = 80;
 export const TEXT_POSITION_LABEL: Record<TextPosition, string> = { top: "위", center: "가운데", bottom: "아래" };
@@ -55,6 +57,7 @@ export function sanitizeOverlay(value: any): OverlaySettings {
   return {
     showTitle: value.showTitle !== false,
     title: typeof value.title === "string" ? value.title.slice(0, MAX_TEXT_LENGTH) : "",
+    subtitle: typeof value.subtitle === "string" ? value.subtitle.slice(0, MAX_TEXT_LENGTH) : "",
     showCredits: value.showCredits !== false,
     texts: (Array.isArray(value.texts) ? value.texts : []).map(sanitizeText).filter((t: TextOverlay | null): t is TextOverlay => t !== null).slice(0, MAX_TEXTS),
   };
