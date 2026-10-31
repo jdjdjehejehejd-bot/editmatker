@@ -1,6 +1,6 @@
 // 사용자가 자유롭게 적은 "특징" 문장을 편집 스타일 값으로 바꿉니다.
 
-import { isNsfwRequested } from "./moderation";
+import { hasSexualWords, isNsfwRequested } from "./moderation";
 
 export type Mood = "hype" | "cinematic" | "emotional" | "retro";
 export type Grade = "natural" | "warm" | "cool" | "mono" | "vivid" | "teal-orange";
@@ -343,6 +343,8 @@ const NSFW_HINT_DICTIONARY: [RegExp, string][] = [
   [/에로틱|에로|erotic|erotica/i, "erotic"],
   [/섹슈얼|sexual/i, "sexual"],
   [/섹스|\bsex\b/i, "sex"],
+  // 노골적인 낱말도 부드러운 검색어로 옮깁니다(그 낱말 그대로는 찾을 영상이 없음).
+  [/야동|포르노|음란|성인배우|av배우|성인영상|성인방송|벗방|porn|hentai/i, "sexy"],
   // 엣지는 일본어 エッチ를 옮긴 표현입니다.
   [/엣지|엣치|에치|エッチ|ecchi|etchi/i, "ecchi"],
   [/누드|나체|벗은|벗고|탈의|nude|naked/i, "nude"],
@@ -359,7 +361,7 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   // 특징·분위기에 NSFW 표시가 있으면 성적 묘사도 뜻이 있는 낱말로 읽습니다.
   const nsfw = isNsfwRequested(text);
   // NSFW 모드에서 성적 묘사를 적었으면 편집의 결(색·효과·전환)도 그쪽으로 맞춥니다.
-  const sensual = nsfw && SENSUAL_WORDS.test(text);
+  const sensual = nsfw && (SENSUAL_WORDS.test(text) || hasSexualWords(text));
   const scores = (Object.keys(MOOD_KEYWORDS) as Mood[]).map(mood => ({
     mood,
     hits: (text.match(new RegExp(MOOD_KEYWORDS[mood].source, "gi")) ?? []).length,
@@ -446,8 +448,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
     // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
     if (isNsfwRequested(word)) continue;
-    // 성적 표현은 NSFW 표시가 있을 때만 검색어로 씁니다(없으면 입력 단계에서 막힘).
-    if (!nsfw && SENSUAL_WORDS.test(word)) continue;
+    // 성적 표현은 그 낱말 그대로 검색어로 쓰지 않습니다(NSFW면 위 사전이 부드러운 검색어로 옮김).
+    if (SENSUAL_WORDS.test(word) || hasSexualWords(word)) continue;
     // 편집 스타일을 말하는 영어 단어(fade, fast cuts, grain 등)는 영상 검색어로 쓰지 않습니다.
     const styleWord = [...Object.values(MOOD_KEYWORDS), ...GRADE_KEYWORDS.map(([, re]) => re), ...EFFECT_KEYWORDS.map(([, re]) => re), ...PACE_KEYWORDS.map(([, re]) => re), ...TRANSITION_KEYWORDS.map(([, re]) => re)].some(re => re.test(word));
     if (!styleWord && !/^(?:cuts?|edits?|style|no|without|beats?|tempo|transitions?|effects?|feel|vibe|mood)$/i.test(word) && searchHints.length < 4) searchHints.push(word.toLowerCase());

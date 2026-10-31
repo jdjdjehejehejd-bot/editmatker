@@ -152,6 +152,11 @@ export function findBlockedWords(text: string, options: ModerationOptions = {}):
   return [...found.values()];
 }
 
+/** 문장에 성적 낱말이 들어 있는지 — NSFW 모드에서 편집 결(감성 분위기·따뜻한 색)을 자동으로 맞출 때 씁니다. */
+export function hasSexualWords(text: string): boolean {
+  return findBlockedWords(text).some(hit => hit.category === "성적");
+}
+
 export function isTextAllowed(...texts: (string | null | undefined)[]) {
   return isTextAllowedWith({}, ...texts);
 }

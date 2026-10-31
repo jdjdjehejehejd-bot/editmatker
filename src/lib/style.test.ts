@@ -217,6 +217,19 @@ describe("NSFW 성적 낱말 확장", () => {
     }
   });
 
+  it("NSFW에서는 어떤 성적 낱말이든 감성 결이 자동으로 붙는다", () => {
+    for (const text of ["nsfw, 야동", "nsfw, 포르노", "nsfw, 성인배우", "nsfw, porn"]) {
+      const style = parseStyle(text);
+      expect(style.mood, text).toBe("emotional");
+      expect(style.grade, text).toBe("warm");
+      expect(style.effects.has("slowmo"), text).toBe(true);
+      expect(style.effects.has("zoom"), text).toBe(true);
+      expect(style.transition, text).toBe("fade");
+      expect(style.searchHints, text).toContain("sexy");
+      expect(style.matched, text).not.toHaveLength(0);
+    }
+  });
+
   it("NSFW와 함께 적으면 에로틱·섹슈얼도 성적 결을 적용한다", () => {
     const style = parseStyle("nsfw, 에로틱");
     expect(style.mood).toBe("emotional");
