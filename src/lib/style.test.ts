@@ -138,3 +138,20 @@ describe("특징 문장의 장면 분위기", () => {
     expect(parseStyle("격렬한 장면, 천천히").pace).toBe("slow"); // 직접 말한 컷 속도가 우선
   });
 });
+
+describe("특징 문장의 화면 느낌과 흐름", () => {
+  it("느낌 낱말을 화면 보정으로", () => {
+    expect(parseStyle("어둡고 무거운 분위기").look).toMatchObject({ exposure: 0.86, vignette: 1.5 });
+    expect(parseStyle("밝고 청량하게").look).toMatchObject({ exposure: 1.08, vignette: 0.6 });
+    expect(parseStyle("몽환적이고 꿈 같은").look?.glow).toBe(1);
+    expect(parseStyle("물 빠진 색, 부드럽게").look).toMatchObject({ saturation: 0.75, contrast: 0.9 });
+    expect(parseStyle("웅장하게").look).toBeUndefined();
+  });
+
+  it("흐름 낱말을 드롭 위치·아웃트로로", () => {
+    expect(parseStyle("점점 고조되게").structure).toEqual({ dropRatio: 0.4 });
+    expect(parseStyle("처음부터 터지게").structure).toEqual({ dropRatio: 0.08 });
+    expect(parseStyle("여운 있게 마무리").structure).toEqual({ outroBeats: 8 });
+    expect(parseStyle("").structure).toBeUndefined();
+  });
+});

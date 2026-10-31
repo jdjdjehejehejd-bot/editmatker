@@ -5,7 +5,7 @@ import { cropOffset, focusAt, frameScale, smoothTrack, type ContentBox, type Foc
 import type { FrameSample } from "./highlights";
 import { renderableTexts, TEXT_SIZE_RATIO, textAlpha, textAnchorY, type TextOverlay } from "./overlay";
 import type { EditPlan, Segment } from "./plan";
-import type { EditStyle, Grade } from "./style";
+import { NEUTRAL_LOOK, type EditStyle, type Grade, type Look } from "./style";
 
 export type Aspect = "9:16" | "16:9" | "1:1";
 
@@ -133,9 +133,18 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   const tealOrange = ctx.createLinearGradient(0, 0, 0, H);
   tealOrange.addColorStop(0, "rgba(0,140,150,0.35)");
   tealOrange.addColorStop(1, "rgba(255,130,40,0.3)");
+  // 특징 문장의 화면 느낌(밝기·대비·채도·빛 번짐·가장자리 어둡게)
+  const look: Look = style.look ?? NEUTRAL_LOOK;
+  const frameFilter = `${GRADE_FILTER[style.grade]}${look.exposure !== 1 ? ` brightness(${look.exposure})` : ""}${look.contrast !== 1 ? ` contrast(${look.contrast})` : ""}${look.saturation !== 1 ? ` saturate(${look.saturation})` : ""}`;
   const vignette = ctx.createRadialGradient(W / 2, H / 2, Math.min(W, H) * 0.35, W / 2, H / 2, Math.max(W, H) * 0.75);
   vignette.addColorStop(0, "rgba(0,0,0,0)");
-  vignette.addColorStop(1, "rgba(0,0,0,0.55)");
+  vignette.addColorStop(1, `rgba(0,0,0,${Math.min(0.85, 0.55 * look.vignette).toFixed(3)})`);
+  // 빛 번짐: 지금 화면을 아주 작게 줄였다가 늘려 흐린 빛을 만들고 밝은 부분만 살짝 더합니다(screen).
+  const glowCanvas = look.glow > 0 ? document.createElement("canvas") : null;
+  if (glowCanvas) {
+    glowCanvas.width = Math.max(8, Math.round(W / 12));
+    glowCanvas.height = Math.max(8, Math.round(H / 12));
+  }
   const urls = new Map(options.sources.map(s => [s.id, s.url]));
   const contents = new Map(options.sources.map(s => [s.id, s.analysis?.content]));
   const framing = options.framing ?? "auto";
@@ -271,7 +280,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     const w = vw * scale;
     const h = vh * scale;
     ctx.save();
-    if (supportsFilter) ctx.filter = GRADE_FILTER[style.grade];
+    if (supportsFilter) ctx.filter = frameFilter;
     ctx.globalAlpha = alpha;
     if (video.readyState >= 2) {
       // 화면을 다 채우지 못하면 같은 장면을 흐리고 어둡게 깔아 빈 곳을 메웁니다.
@@ -319,10 +328,27 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
 
   const drawOverlays = (seg: Segment | null, now: number) => {
     ctx.save();
+    if (glowCanvas) {
+      glowCanvas.getContext("2d")!.drawImage(canvas, 0, 0, glowCanvas.width, glowCanvas.height);
+      ctx.globalCompositeOperation = "screen";
+      ctx.globalAlpha = 0.25 * look.glow;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(glowCanvas, 0, 0, W, H);
+      ctx.globalAlpha = 1;
+      ctx.globalCompositeOperation = "source-over";
+    }
     if (!supportsFilter) {
       for (const [op, color] of GRADE_TINT[style.grade]) {
         ctx.globalCompositeOperation = op;
         ctx.fillStyle = color;
+        ctx.fillRect(0, 0, W, H);
+      }
+      // ctx.filter가 없는 브라우저(Safari): 밝기만 덧칠로 비슷하게 맞춥니다.
+      if (look.exposure !== 1) {
+        const level = Math.round(255 * look.exposure);
+        // 밝게: 흰색을 살짝 더함(screen), 어둡게: 회색을 곱함(multiply)
+        ctx.globalCompositeOperation = look.exposure > 1 ? "screen" : "multiply";
+        ctx.fillStyle = look.exposure > 1 ? `rgba(255,255,255,${((look.exposure - 1) * 1.5).toFixed(3)})` : `rgb(${level},${level},${level})`;
         ctx.fillRect(0, 0, W, H);
       }
     }

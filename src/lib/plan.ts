@@ -123,8 +123,11 @@ export function buildPlan(input: PlanInput): EditPlan {
   const dropBeat =
     input.dropAt !== undefined
       ? Math.max(4, Math.min(totalBeats - 8, Math.round((input.dropAt - beatOffset) / beat / 4) * 4))
-      : Math.max(4, Math.round((totalBeats * 0.25) / 4) * 4);
-  const outroBeats = totalBeats - dropBeat >= 16 ? 4 : 0;
+      : // 특징 문장의 흐름("점점 고조" → 드롭을 늦게, "처음부터 터지게" → 일찍)을 따릅니다. 기본은 1/4 지점.
+        Math.max(4, Math.min(totalBeats - 8, Math.round((totalBeats * (style.structure?.dropRatio ?? 0.25)) / 4) * 4));
+  // "여운 있게"면 아웃트로를 길게(자리가 있을 때만).
+  const wantedOutro = style.structure?.outroBeats ?? 4;
+  const outroBeats = totalBeats - dropBeat >= 12 + wantedOutro ? wantedOutro : totalBeats - dropBeat >= 16 ? 4 : 0;
 
   const sections: { section: Section; beats: number }[] = [
     ...fillSection(style.cutBeats.intro, dropBeat).map(beats => ({ section: "intro" as const, beats })),
