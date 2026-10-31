@@ -89,6 +89,12 @@ describe("NSFW 모드", () => {
     for (const on of ["NSFW", "nsfw", "NSFW 시네마틱", "N.S.F.W", "n s f w", "무검열", "19+", "uncensored", "no censor"]) expect(isNsfwRequested(on), on).toBe(true);
   });
 
+  it("에로틱·섹슈얼도 같은 표시로 읽는다", () => {
+    for (const on of ["에로틱", "에로틱한 무드", "섹슈얼", "erotic", "sexual"]) expect(isNsfwRequested(on), on).toBe(true);
+    expect(checkUserInput("성인배우", "에로틱")).toBeNull();
+    expect(checkUserInput("고양이", "에로틱, 씨발")).toMatch(/욕설·혐오/);
+  });
+
   it("표시가 없으면 꺼진 상태다", () => {
     for (const off of ["", "   ", "웅장하고 시네마틱하게", "빠른 컷, 네온, 120bpm", null, undefined]) expect(isNsfwRequested(off), String(off)).toBe(false);
   });

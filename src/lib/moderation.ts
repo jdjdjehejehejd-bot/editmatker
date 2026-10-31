@@ -5,8 +5,6 @@
 // 2) 장면 검사 — NSFW.js(MobileNetV2) 모델로 영상 프레임을 분류해 선정적인 영상을 뺍니다.
 //    모델은 처음 필요할 때만 내려받고, 영상은 기기 밖으로 나가지 않습니다.
 
-import { withTimeout } from "./net";
-
 export type BlockCategory = "성적" | "욕설·혐오" | "폭력·잔혹" | "약물";
 
 interface Rule {
@@ -78,9 +76,10 @@ export interface ModerationOptions {
   sports?: boolean;
 }
 
-/** NSFW 모드를 켜는 표시 — 띄어쓰기·기호(N.S.F.W, n s f w)도 같은 말로 봅니다. */
-const NSFW_MARKERS = ["nsfw", "무검열", "노검열", "검열해제", "검열없", "19금"];
-const NSFW_LOOSE = /uncensored|no\s*censor|19\+/i;
+/** NSFW 모드를 켜는 표시 — 띄어쓰기·기호(N.S.F.W, n s f w)도 같은 말로 봅니다.
+ *  성적 성향을 그대로 적은 말(에로틱·섹슈얼)도 같은 뜻으로 읽습니다. */
+const NSFW_MARKERS = ["nsfw", "무검열", "노검열", "검열해제", "검열없", "19금", "에로틱", "에로", "섹슈얼"];
+const NSFW_LOOSE = /uncensored|no\s*censor|19\+|\berotic\b|\bsexual\b/i;
 
 /** 특징·분위기 문장에 NSFW 표시가 있는지 */
 export function isNsfwRequested(features: string | null | undefined): boolean {
@@ -268,8 +267,7 @@ export async function screenFrames(frames: HTMLCanvasElement[], options: Moderat
   if (!frames.length) return { blocked: false, reason: null };
   let model: Classifier;
   try {
-    // 모델을 받다가 멈추면 모든 영상이 끝없이 기다리므로 시간 제한을 둡니다.
-    model = await withTimeout(loadClassifier(), 60_000);
+    model = await loadClassifier();
   } catch {
     return { blocked: true, reason: "장면 검열 모델을 불러오지 못해 안전을 위해 제외했어요" };
   }

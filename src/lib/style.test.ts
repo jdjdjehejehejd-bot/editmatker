@@ -203,7 +203,18 @@ describe("NSFW 성적 낱말 확장", () => {
   });
 
   it("NSFW 표시가 없으면 새 낱말도 검색어로 쓰지 않는다", () => {
-    expect(parseStyle("에로틱 섹스 엣지").searchHints).toEqual([]);
+    expect(parseStyle("섹스 엣지").searchHints).toEqual([]);
+  });
+
+  it("에로틱·섹슈얼만 적어도 NSFW로 읽어 성적 결을 적용한다", () => {
+    const style = parseStyle("에로틱");
+    expect(style.mood).toBe("emotional");
+    expect(style.grade).toBe("warm");
+    expect(style.transition).toBe("fade");
+    expect(style.effects.has("slowmo")).toBe(true);
+    expect(style.searchHints).toContain("erotic");
+    expect(style.matched).toContain("에로틱");
+    expect(parseStyle("섹슈얼한 분위기").searchHints).toContain("sexual");
   });
 });
 
