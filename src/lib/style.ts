@@ -26,7 +26,56 @@ export interface EditStyle {
   pace?: Pace;
   /** 특징 문장에서 알아들은 말 (화면에 "이렇게 읽었어요"로 보여 줌) */
   matched?: string[];
+  /** 특징 문장이 말하는 "어떤 장면"을 고를지 (밝기, 동작 세기, 함성, 사람 얼굴, 화려함, 찍힌 대상) */
+  scene?: ScenePreference;
 }
+
+export interface ScenePreference {
+  brightness?: "bright" | "dark";
+  intensity?: "intense" | "calm";
+  /** 함성·환호처럼 소리가 큰 장면 */
+  loud?: boolean;
+  /** 얼굴·표정·클로즈업처럼 사람이 크게 보이는 장면 */
+  people?: boolean;
+  /** 화려하고 색이 선명한 장면 */
+  colorful?: boolean;
+  /** 찍힌 대상(이미지 분류 묶음의 term, 예: "ocean", "car racing") */
+  subjects?: string[];
+}
+
+/** 특징 문장의 장면 낱말 → 장면 선호 */
+const SCENE_RULES: { re: RegExp; apply: (p: ScenePreference) => void }[] = [
+  { re: /밝은|밝게|화사|햇살|햇빛|낮 ?장면|대낮|bright|sunny|daylight/i, apply: p => (p.brightness = "bright") },
+  { re: /어두운|어둡게|밤 ?장면|야간|야경|다크|그림자|dark|night/i, apply: p => (p.brightness = "dark") },
+  { re: /격렬|격한|폭발|질주|난타|몸싸움|공격|액션|역동|타격|intense|action|explosive|fight/i, apply: p => (p.intensity = "intense") },
+  { re: /잔잔한 ?장면|고요|평온|정적인|멈춘 ?듯|여유로운 ?장면|calm scenes?|still|peaceful/i, apply: p => (p.intensity = "calm") },
+  { re: /함성|환호|관중|열광|떼창|응원|박수|crowd|cheer|roar/i, apply: p => (p.loud = true) },
+  { re: /얼굴|표정|클로즈 ?업|인물 ?위주|사람 ?위주|눈빛|face|close ?-?up|portrait/i, apply: p => (p.people = true) },
+  { re: /화려|알록달록|컬러풀|색감 ?좋|쨍한|colorful|vibrant/i, apply: p => (p.colorful = true) },
+];
+
+/** 한 글자 우리말 낱말(산, 개, 새, 배)이 다른 낱말 속(산책, 생산, 개인)에 든 경우를 빼고 찾는 정규식 조각 */
+const koWord = (word: string) => `(?:^|[^가-힣0-9])${word}(?=$|[^가-힣]|[이을를에과와의도])`;
+
+/** 찍힌 대상 낱말 → 이미지 분류 묶음(vision.ts CATEGORIES의 term) */
+const SUBJECT_WORDS: [RegExp, string][] = [
+  [/바다|해변|파도|해안|beach|ocean|\bsea\b|\bwaves?\b/i, "ocean"],
+  [new RegExp(`${koWord("산")}|등산|설산|화산|mountain|hiking`, "i"), "mountain"],
+  [/호수|lake/i, "lake"],
+  [/도시|야경|빌딩|도심|city|street/i, "city"],
+  [/자동차|레이싱|드리프트|\bcars?\b|racing|drift/i, "car racing"],
+  [/오토바이|바이크|motorcycle|motorbike/i, "motorcycle"],
+  [/비행기|전투기|에어쇼|airplane|jet/i, "airplane"],
+  [/로켓|발사|우주|rocket|launch|space/i, "rocket launch"],
+  [/무대|공연|콘서트|라이브|드럼|stage|concert/i, "concert"],
+  [new RegExp(`강아지|${koWord("개")}|\\bdogs?\\b|puppy`, "i"), "dog"],
+  [/고양이|\bcats?\b|kitten/i, "cat"],
+  [new RegExp(`${koWord("새")}|\\bbirds?\\b`, "i"), "bird"],
+  [/기차|\btrains?\b/i, "train"],
+  [new RegExp(`${koWord("배")}|요트|보트|\\bships?\\b|\\bboats?\\b|yacht`, "i"), "ship"],
+  [/음식|요리|먹방|food|cooking/i, "food"],
+  [/스키|스노보드|snowboard|\bski(?:ing)?\b/i, "skiing"],
+];
 
 export type TransitionStyle = "cut" | "fade" | "whip" | "punch";
 export type Pace = "slow" | "normal" | "fast";
@@ -254,7 +303,15 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
       matched.add(hit);
     }
   }
-  const pace = PACE_KEYWORDS.find(([, re]) => note(re))?.[0];
+  const scene: ScenePreference = {};
+  for (const rule of SCENE_RULES) if (note(rule.re)) rule.apply(scene);
+  const subjects = SUBJECT_WORDS.filter(([re]) => note(re)).map(([, term]) => term);
+  if (subjects.length) scene.subjects = [...new Set(subjects)];
+
+  // 컷 속도를 따로 말하지 않았으면 장면 분위기를 따릅니다: 격렬한 장면은 빠르게, 잔잔한 장면은 길게.
+  // 분위기가 이미 그 속도(하이프는 빠름, 감성은 느림)면 한 번 더 바꾸지 않습니다.
+  const scenePace = scene.intensity === "intense" && mood !== "hype" ? "fast" : scene.intensity === "calm" && mood !== "emotional" ? "slow" : undefined;
+  const pace = PACE_KEYWORDS.find(([, re]) => note(re))?.[0] ?? scenePace;
   const transition = TRANSITION_KEYWORDS.find(([, re]) => note(re))?.[0];
   const paceFactor = pace ? PACE_FACTOR[pace] : 1;
   const cutBeats =
@@ -296,6 +353,7 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     pace,
     transition,
     matched: [...matched],
+    scene: Object.keys(scene).length ? scene : undefined,
   };
 }
 

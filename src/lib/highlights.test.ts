@@ -133,3 +133,22 @@ describe("카메라만 움직이는 장면", () => {
     expect(best.peak).toBeCloseTo(20, 0);
   });
 });
+
+describe("특징 문장의 장면 선호로 점수", () => {
+  it("어두운 장면·함성 장면을 원하면 그런 샘플이 높아짐", async () => {
+    const { scoreSamples } = await import("./highlights");
+    const samples = [
+      { t: 0, motion: 0.05, audio: 0.2, color: 0.4, brightness: 0.8, cut: false },
+      { t: 1, motion: 0.05, audio: 0.2, color: 0.4, brightness: 0.25, cut: false },
+      { t: 2, motion: 0.05, audio: 0.9, color: 0.4, brightness: 0.5, cut: false },
+    ];
+    const weights = { motion: 1, audio: 0.5, color: 0.3, stability: 0 };
+    const dark = scoreSamples(samples, weights, 0, { brightness: "dark" });
+    expect(dark[1]).toBeGreaterThan(dark[0]);
+    const bright = scoreSamples(samples, weights, 0, { brightness: "bright" });
+    expect(bright[0]).toBeGreaterThan(bright[1]);
+    const plain = scoreSamples(samples, weights);
+    const loud = scoreSamples(samples, weights, 0, { loud: true });
+    expect(loud[2] - loud[0]).toBeGreaterThan(plain[2] - plain[0]);
+  });
+});

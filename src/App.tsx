@@ -836,6 +836,11 @@ export default function App() {
                   {result.inferredTopic.source === "vision" ? ` (확신 ${Math.round(result.inferredTopic.confidence * 100)}%)` : ""}
                 </p>
               )}
+              {result?.matched && (
+                <p className="learned">
+                  <b>닮은 장면 맞추기</b> 찾은 영상은 올린 영상과 닮은 순으로, 올린 영상은 주제와 닮은 장면 위주로 골랐어요
+                </p>
+              )}
               {result?.track && (
                 <p className="learned">
                   <b>배경음악</b>{" "}

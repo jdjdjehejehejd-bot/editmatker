@@ -17,6 +17,8 @@ export interface VideoAnalysis {
   content?: ContentBox;
   /** 검열용 장면(224×224). 검사가 끝나면 비웁니다. */
   keyframes: HTMLCanvasElement[];
+  /** 각 검열용 장면의 시각(초) — 장면별 닮은 정도를 샘플에 옮길 때 씀 */
+  keyframeTimes?: number[];
 }
 
 /** 영상마다 검열에 쓸 장면 수 */
@@ -192,6 +194,7 @@ export async function analyzeVideo(
   // 전체 길이에 고르게 퍼진 장면을 검열용으로 따로 담아 둡니다.
   const keyframeAt = new Set(Array.from({ length: Math.min(KEYFRAMES, times.length) }, (_, k) => Math.floor(((k + 0.5) * times.length) / Math.min(KEYFRAMES, times.length))));
   const keyframes: HTMLCanvasElement[] = [];
+  const keyframeTimes: number[] = [];
   let previous: Float32Array | null = null;
   // 줄·칸마다 가장 밝았던 밝기 — 끝까지 어두운 가장자리는 검은 띠로 봅니다.
   const rowPeak = new Float32Array(H);
@@ -207,6 +210,7 @@ export async function analyzeVideo(
       frame.width = frame.height = KEYFRAME_SIZE;
       frame.getContext("2d")!.drawImage(video, 0, 0, KEYFRAME_SIZE, KEYFRAME_SIZE);
       keyframes.push(frame);
+      keyframeTimes.push(times[i]);
     }
     const pixels = ctx.getImageData(0, 0, W, H).data;
     const luma = new Float32Array(W * H);
@@ -254,7 +258,7 @@ export async function analyzeVideo(
   const audio = await audioPromise;
   const cuts = detectCuts(raw.map(r => r.motion));
   const samples = raw.map((r, i) => ({ ...r, audio: audio[i] ?? 0, cut: cuts[i] }));
-  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes, content: contentBox(rowPeak, colPeak) };
+  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes, keyframeTimes, content: contentBox(rowPeak, colPeak) };
   disposeVideo(video);
   return result;
 }
