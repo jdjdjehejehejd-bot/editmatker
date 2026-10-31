@@ -463,7 +463,7 @@ export default function App() {
                 onChange={setUploadFiles}
                 weightOf={weightOf}
                 onWeight={(file, weight) => setUploadWeights(current => ({ ...current, [uploadKey(file)]: weight }))}
-                shares={uploadShares(uploadFiles.map(weightOf), topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || (needsTopicGuess ? 1 : 0), !uploadsOnly)}
+                shares={uploadShares(uploadFiles.map(weightOf), !uploadsOnly && (topicSpecs.length || needsTopicGuess) ? sourceCount : 0)}
                 label="영상 올리기"
                 hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 파일마다 ×1~×5로 비중을 정할 수 있고, 주제를 비우면 영상을 보고 비슷한 주제를 골라 섞어요`}
               />
