@@ -2,7 +2,8 @@
 
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
 import { isMobile, LIMITS } from "./device";
-import { checkUserInput, GenerationBlockedError, type ModerationOptions, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
+import { isChunkLoadError, OUTDATED_MESSAGE } from "./version";
+import { checkUserInput, classifierError, MODEL_FAILED, GenerationBlockedError, type ModerationOptions, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { assessVideo, pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
@@ -719,6 +720,15 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
 
   if (!loaded.length) {
     const more = failures.length > 6 ? `\n…외 ${failures.length - 6}개` : "";
+    // 검열 모델을 못 불러와서 뺀 것이면 영상 문제가 아니므로 그 이유를 먼저 알려 줍니다.
+    // (배포 전에 열어 둔 페이지는 새 버전의 파일을 받지 못하는 경우가 많아 새로고침을 권합니다.)
+    if (failures.some(line => line.endsWith(MODEL_FAILED))) {
+      throw new Error(
+        isChunkLoadError(classifierError)
+          ? OUTDATED_MESSAGE
+          : `부적절한 장면을 검사하는 모델을 불러오지 못해서 영상을 쓰지 못했어요. 인터넷 연결을 확인하고 새로고침한 뒤 다시 시도해 주세요.\n\n${failures.slice(0, 6).join("\n")}${more}`
+      );
+    }
     // 올린 영상만 썼으면 검색 이야기가 아니라 올린 파일의 문제를 알려 줍니다.
     const lead = online.length
       ? "찾은 영상을 불러오지 못했어요. 잠시 후 다시 시도하거나 다른 주제를 입력해 보세요."
