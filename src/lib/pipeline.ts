@@ -447,12 +447,23 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   };
 
   /** 필요한 만큼만(남은 칸 수, 최대 lookahead+1개) 미리 시작합니다 — 쓰지 않을 영상을 받느라 데이터를 낭비하지 않게. */
+  // 같은 출처에서 받기가 연달아 실패하면(예: Reddit 영상 서버가 막힘) 그 출처의 나머지는 받지 않고 건너뜁니다 —
+  // 모두 같은 이유로 실패해 시간과 데이터만 쓰지 않게. 한 번이라도 받아지면 다시 셉니다.
+  const failStreak = new Map<string, number>();
+  const blockedProviders = new Map<string, string>();
+  const isDownloadFailure = (reason: string) => reason.startsWith("다운로드 실패") || reason.includes("접속이 막혔어요");
+
   const enqueue = (topic: TopicResult, want: number) => {
     const queue = queues.get(topic)!;
     while (queue.length < Math.min(lookahead + 1, want)) {
       const index = cursor.get(topic)!;
       if (index >= topic.candidates.length) return;
       cursor.set(topic, index + 1);
+      const blockedReason = blockedProviders.get(topic.candidates[index].provider);
+      if (blockedReason) {
+        events.skipped(topic.candidates[index], `${topic.candidates[index].provider}에서 계속 같은 이유로 받지 못해 건너뛰었어요 (${blockedReason})`);
+        continue;
+      }
       const controller = new AbortController();
       const job: Job = { topic, candidate: topic.candidates[index], controller, promise: Promise.resolve(null as never) };
       job.promise = prepare(job);
@@ -503,6 +514,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact) });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
         const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
+        failStreak.set(candidate.provider, 0);
         loaded.push(source);
         loadedBy.get(topic)!.push(source);
         events.loaded(source);
@@ -510,10 +522,26 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       } catch (error) {
         if (url) URL.revokeObjectURL(url);
         if (signal.aborted || error instanceof GenerationBlockedError) throw error;
+        // 같은 출처가 막혀서 미리 받기를 멈춘 영상은 그 이유로 건너뜁니다.
+        const blockedReason = job.controller.signal.aborted ? blockedProviders.get(candidate.provider) : undefined;
+        if (blockedReason) {
+          events.skipped(candidate, `${candidate.provider}에서 계속 같은 이유로 받지 못해 건너뛰었어요 (${blockedReason})`);
+          continue;
+        }
         const reason = describeError(error);
         failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
         if (!topicFailures.has(topic)) topicFailures.set(topic, reason);
         events.skipped(candidate, reason);
+        if (isDownloadFailure(reason) && !candidate.file) {
+          const streak = (failStreak.get(candidate.provider) ?? 0) + 1;
+          failStreak.set(candidate.provider, streak);
+          if (streak >= 3 && !blockedProviders.has(candidate.provider)) {
+            blockedProviders.set(candidate.provider, reason.replace(/^다운로드 실패: /, ""));
+            // 이미 미리 받기 시작한 같은 출처 영상도 멈춥니다(다른 출처 영상은 계속).
+            for (const list of queues.values())
+              for (const queued of list) if (queued.candidate.provider === candidate.provider) queued.controller.abort();
+          }
+        }
       } finally {
         current = null;
       }

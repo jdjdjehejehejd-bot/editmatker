@@ -55,3 +55,20 @@ describe("Vercel 프록시", () => {
     expect((await response.json()).error).toBe("Reddit 응답 오류 403, PullPush 응답 오류 (403)");
   });
 });
+
+describe("Reddit 영상 주소 후보", () => {
+  it("원래 주소 → 쿼리 없이 → 낮은 화질 → CMAF 이름 순서", async () => {
+    const { redditVideoVariants } = await import("../../api/_reddit");
+    const list = redditVideoVariants("https://v.redd.it/abc123/DASH_720.mp4?source=fallback");
+    expect(list[0]).toBe("https://v.redd.it/abc123/DASH_720.mp4?source=fallback");
+    expect(list[1]).toBe("https://v.redd.it/abc123/DASH_720.mp4");
+    expect(list).toContain("https://v.redd.it/abc123/DASH_480.mp4");
+    expect(list).toContain("https://v.redd.it/abc123/CMAF_720.mp4");
+    expect(list.length).toBeLessThanOrEqual(8);
+    expect(list.every(url => url.startsWith("https://v.redd.it/abc123/"))).toBe(true);
+    // 더 높은 화질은 만들지 않음
+    expect(redditVideoVariants("https://v.redd.it/x/DASH_360.mp4").some(url => url.includes("_720"))).toBe(false);
+    // 다른 주소는 그대로
+    expect(redditVideoVariants("https://v.redd.it/x/HLSPlaylist.m3u8")).toEqual(["https://v.redd.it/x/HLSPlaylist.m3u8"]);
+  });
+});

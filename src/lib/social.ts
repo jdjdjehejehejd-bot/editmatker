@@ -119,6 +119,8 @@ export function parseRedditSearch(data: any, helper: string | null, offset = 0):
       const pageUrl = `https://www.reddit.com${post.permalink}`;
       // 도우미가 없으면 소리 없는 fallback 영상만 쓸 수 있습니다(배경음악으로 대체되므로 편집에는 지장 없음).
       const direct = typeof video.fallback_url === "string" ? video.fallback_url : null;
+      const previewVideo = post.preview?.reddit_video_preview?.fallback_url;
+      const preview = typeof previewVideo === "string" && previewVideo.startsWith("https://v.redd.it/") ? previewVideo : null;
       const mediaUrl = helper ? helperMediaUrl(helper, pageUrl) : direct;
       if (!mediaUrl) return;
       sources.push({
@@ -133,6 +135,8 @@ export function parseRedditSearch(data: any, helper: string | null, offset = 0):
         mediaUrl,
         // 브라우저가 v.redd.it을 직접 못 받으면 같은 사이트의 /api/media 프록시로 다시 시도합니다.
         fallbackUrl: !helper && direct ? `${proxyBase()}/api/media?url=${encodeURIComponent(direct)}` : undefined,
+        // 그래도 막히면 Reddit이 따로 만들어 둔 미리보기 영상(짧고 작은 mp4)을 프록시로 받아 봅니다.
+        alternates: !helper && preview && preview !== direct ? [`${proxyBase()}/api/media?url=${encodeURIComponent(preview)}`] : undefined,
         poster: post.preview?.images?.[0]?.source?.url ?? (String(post.thumbnail ?? "").startsWith("http") ? post.thumbnail : null),
         duration,
         bytes: null,
