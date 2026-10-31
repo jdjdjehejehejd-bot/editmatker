@@ -153,6 +153,8 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
   backdrop.width = Math.max(8, Math.round(W / 16));
   backdrop.height = Math.max(8, Math.round(H / 16));
   const backdropCtx = backdrop.getContext("2d")!;
+  // 배경에도 같은 색감을 주되, 아주 작은 캔버스에서만 계산합니다.
+  if (supportsFilter) backdropCtx.filter = frameFilter;
   // 자동 리프레이밍: 영상마다 관심 지점 경로를 부드럽게 만들어 둡니다(장면 전환을 넘어서 섞이지 않게 컷마다 따로).
   const tracks = new Map<string, FocusPoint[]>(
     options.sources.map(source => {
@@ -280,10 +282,10 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     const w = vw * scale;
     const h = vh * scale;
     ctx.save();
-    if (supportsFilter) ctx.filter = frameFilter;
     ctx.globalAlpha = alpha;
     if (video.readyState >= 2) {
       // 화면을 다 채우지 못하면 같은 장면을 흐리고 어둡게 깔아 빈 곳을 메웁니다.
+      // 속도: 색감 필터는 작은 배경 캔버스에만 걸고(화면 전체에 필터를 두 번 걸지 않게), 늘려 그릴 때는 필터 없이 그립니다.
       if (vw * base < W - 1 || vh * base < H - 1) {
         const cover = Math.max(backdrop.width / vw, backdrop.height / vh);
         backdropCtx.drawImage(video, sx, sy, vw, vh, (backdrop.width - vw * cover) / 2, (backdrop.height - vh * cover) / 2, vw * cover, vh * cover);
@@ -292,6 +294,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
         ctx.fillStyle = "rgba(0,0,0,0.35)";
         ctx.fillRect(0, 0, W, H);
       }
+      if (supportsFilter) ctx.filter = frameFilter;
       // 가운데가 아니라 관심 지점(사람·움직임)이 화면 가운데에 오도록 자릅니다(관심 지점은 원본 전체 기준이라 실제 화면 기준으로 바꿈).
       const focus = focusAt(tracks.get(seg.sourceId) ?? [], video.currentTime);
       const fx = Math.min(1, Math.max(0, (focus.x - box.x) / box.w));
