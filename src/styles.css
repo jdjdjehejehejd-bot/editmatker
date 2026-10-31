@@ -341,3 +341,7 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .subtitle-line { display: flex; gap: 6px; align-items: center; }
 .subtitle-line .select { flex: 1; min-width: 0; }
 .subtitle-line .chip { flex: none; white-space: nowrap; }
+
+/* 시작할 수 없을 때: 버튼은 눌리되 흐리게, 누르면 이유를 아래에 */
+.primary.muted { background: #b2dffc; }
+.start-hint { margin: 8px 0 0; color: #d93025; font-size: 13px; font-weight: 600; text-align: center; }

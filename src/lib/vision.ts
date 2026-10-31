@@ -12,7 +12,7 @@ export interface InferredTopic {
   term: string;
   /** 화면에 보여 줄 이름 */
   label: string;
-  source: "filename" | "vision";
+  source: "filename" | "vision" | "features";
   /** 0~1 (파일 이름이면 1) */
   confidence: number;
 }

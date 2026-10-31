@@ -59,6 +59,11 @@ interface RunSnapshot {
 export default function App() {
   const [topic, setTopic] = useState("");
   const [features, setFeatures] = useState("");
+  // 입력칸을 직접 읽기 위한 참조 — 한글을 조합 중인 채로(삼성 키보드 등) 버튼을 누르면 입력값이 아직 상태에 안 들어와 있을 수 있어서
+  const topicRef = useRef<HTMLInputElement>(null);
+  const featuresRef = useRef<HTMLTextAreaElement>(null);
+  /** 만들기를 눌렀는데 시작할 수 없을 때 버튼 아래에 보여 줄 이유 */
+  const [startHint, setStartHint] = useState<string | null>(null);
   const [seconds, setSeconds] = useState(30);
   const [aspect, setAspect] = useState<Aspect>("9:16");
   const [sourceCount, setSourceCount] = useState(LIMITS.defaultSources);
@@ -77,7 +82,8 @@ export default function App() {
   const [framing, setFraming] = useState<Framing>("auto");
   const patchOverlay = (patch: Partial<OverlaySettings>) => setOverlay(current => ({ ...current, ...patch }));
   const patchText = (index: number, patch: Partial<TextOverlay>) => setOverlay(current => ({ ...current, texts: current.texts.map((t, i) => (i === index ? { ...t, ...patch } : t)) }));
-  const canStart = Boolean(topic.trim() || uploadFiles.length);
+  // 주제가 비어 있어도 특징·분위기에 내용이 있으면 거기서 주제를 골라 만듭니다.
+  const canStart = Boolean(topic.trim() || uploadFiles.length || features.trim());
   // 주제를 비우고 영상을 올렸으면 주제를 고를 때 쓸 모델을 미리 받아 둡니다(파일 이름으로 정해지면 받지 않음).
   // 주제를 비우고 올리면 비슷한 주제를 골라 섞으므로(고르면), 비율 안내도 그걸 가정합니다.
   const needsTopicGuess = !topic.trim() && uploadFiles.length > 0;
@@ -222,7 +228,25 @@ export default function App() {
   };
 
   const start = async () => {
-    if (!canStart || status === "running" || blockedInput) return;
+    if (status === "running") return;
+    // 화면에 실제로 적혀 있는 글자를 기준으로 합니다(입력값이 상태에 늦게 들어오는 키보드 대비).
+    const typedTopic = (topicRef.current?.value ?? topic).trim();
+    const typedFeatures = featuresRef.current?.value ?? features;
+    if (typedTopic !== topic.trim()) setTopic(topicRef.current?.value ?? topic);
+    if (typedFeatures !== features) setFeatures(typedFeatures);
+    if (!typedTopic && !uploadFiles.length && !typedFeatures.trim()) {
+      // 예전에는 버튼이 조용히 비활성이라 눌러도 아무 일이 없었습니다. 이제 이유를 알려 주고 주제 칸으로 옮겨 줍니다.
+      setStartHint("주제나 특징·분위기를 입력하거나, 편집할 영상을 올려 주세요.");
+      topicRef.current?.scrollIntoView({ behavior: "smooth", block: "center" });
+      topicRef.current?.focus();
+      return;
+    }
+    const blockedNow = checkUserInput([typedTopic, overlayText].join("\n"), typedFeatures);
+    if (blockedNow) {
+      setStartHint(blockedNow);
+      return;
+    }
+    setStartHint(null);
     reset();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -235,14 +259,14 @@ export default function App() {
       audio = undefined;
     }
     const releaseScreen = await keepScreenOn().catch(() => () => undefined);
-    setRun({ specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle });
+    setRun({ specs: parseTopicInput(typedTopic), style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle });
     setStatus("running");
     stageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
     try {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, freeMusic, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadWeights: uploadFiles.map(weightOf), uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: typedTopic, features: typedFeatures, seconds, sourceCount, musicFile, musicStyle, freeMusic, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadWeights: uploadFiles.map(weightOf), uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -414,9 +438,19 @@ export default function App() {
 
             <label className="field">
               <span>주제</span>
-              <input value={topic} onChange={e => setTopic(e.target.value)} placeholder="예: 손흥민, 3:케인:, 토트넘" maxLength={200} onKeyDown={e => e.key === "Enter" && start()} />
+              <input
+                ref={topicRef}
+                value={topic}
+                onChange={e => {
+                  setTopic(e.target.value);
+                  setStartHint(null);
+                }}
+                placeholder="예: 손흥민, 3:케인:, 토트넘"
+                maxLength={200}
+                onKeyDown={e => e.key === "Enter" && !e.nativeEvent.isComposing && start()}
+              />
               <small className="hint">
-                쉼표로 여러 주제를 섞을 수 있어요 · <code>3:케인:</code>은 3배 비중
+                쉼표로 여러 주제를 섞을 수 있어요 · <code>3:케인:</code>은 3배 비중 · 비워 두면 특징·분위기나 올린 영상을 보고 골라요
               </small>
             </label>
             <div className="field">
@@ -453,7 +487,7 @@ export default function App() {
 
             <label className="field">
               <span>특징 · 분위기</span>
-              <textarea value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
+              <textarea ref={featuresRef} value={features} onChange={e => setFeatures(e.target.value)} rows={2} maxLength={300} placeholder="예: 웅장하고 시네마틱하게, 슬로우모션, 따뜻한 색감" />
             </label>
 
             <details className="style-editor fold" aria-label="편집 스타일">
@@ -779,9 +813,15 @@ export default function App() {
                 중단하기
               </button>
             ) : (
-              <button className="primary" type="button" onClick={start} disabled={!canStart || Boolean(blockedInput)}>
+              // 버튼은 늘 누를 수 있게 둡니다 — 시작할 수 없으면 누를 때 이유를 바로 아래에 보여 줍니다.
+              <button className={`primary ${!canStart || blockedInput ? "muted" : ""}`} type="button" onClick={start}>
                 {blockedInput ? "생성 불가" : status === "done" ? "다시 만들기" : "에딧 만들기"}
               </button>
+            )}
+            {startHint && status !== "running" && (
+              <p className="start-hint" role="alert">
+                {startHint}
+              </p>
             )}
           </section>
 
@@ -872,7 +912,7 @@ export default function App() {
               )}
               {result?.inferredTopic && (
                 <p className="learned">
-                  <b>고른 주제</b> 올린 영상의 {result.inferredTopic.source === "filename" ? "파일 이름" : "장면"}을 보고 "{result.inferredTopic.label}"(으)로 정했어요
+                  <b>고른 주제</b> {result.inferredTopic.source === "features" ? "특징·분위기를" : `올린 영상의 ${result.inferredTopic.source === "filename" ? "파일 이름을" : "장면을"}`} 보고 "{result.inferredTopic.label}"(으)로 정했어요
                   {result.inferredTopic.source === "vision" ? ` (확신 ${Math.round(result.inferredTopic.confidence * 100)}%)` : ""}
                 </p>
               )}
