@@ -43,6 +43,34 @@ export function interestPoint(pixels: ArrayLike<number>, luma: ArrayLike<number>
   return { x: sx / total / width, y: sy / total / height, presence };
 }
 
+/**
+ * 카메라 이동을 뺀 움직임: 이전 프레임을 가로 ±3, 세로 ±2칸 밀어 보며 가장 잘 맞는 위치를 찾고,
+ * 그 위치에서도 남는 밝기 차의 평균을 돌려줍니다(가장자리 여백은 빼고 비교).
+ * 카메라만 따라가는 장면(걷기, 견제)은 작아지고, 주먹·발차기·슛처럼 화면 일부가 확 바뀌면 큽니다.
+ */
+export function residualMotion(luma: ArrayLike<number>, previous: ArrayLike<number>, width: number, height: number, maxDx = 3, maxDy = 2): number {
+  let best = Infinity;
+  for (let dy = -maxDy; dy <= maxDy; dy++) {
+    for (let dx = -maxDx; dx <= maxDx; dx++) {
+      let sum = 0;
+      let n = 0;
+      for (let y = maxDy; y < height - maxDy; y++) {
+        const row = y * width;
+        const prevRow = (y + dy) * width + dx;
+        for (let x = maxDx; x < width - maxDx; x++) {
+          sum += Math.abs(luma[row + x] - previous[prevRow + x]);
+          n++;
+        }
+        // 이미 지금까지의 최솟값보다 크면 더 볼 필요가 없습니다.
+        if (sum > best * n * 1.05 && n > width) break;
+      }
+      const mean = sum / n;
+      if (mean < best) best = mean;
+    }
+  }
+  return Number.isFinite(best) ? best : 0;
+}
+
 export interface FocusPoint {
   t: number;
   x: number;
