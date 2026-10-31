@@ -155,3 +155,26 @@ describe("특징 문장의 화면 느낌과 흐름", () => {
     expect(parseStyle("").structure).toBeUndefined();
   });
 });
+
+describe("특징 문장의 키워드", () => {
+  it("스타일 낱말·일반적인 말·조사를 빼고 내용 키워드만", async () => {
+    const { contentKeywords } = await import("./style");
+    expect(contentKeywords("손흥민 골 장면 위주로, 웅장하게")).toEqual(["손흥민", "골"]);
+    expect(contentKeywords("무대에서 춤추는 장면, 흑백, 슬로모션 없이")).toEqual(expect.arrayContaining(["무대", "춤추"]));
+    expect(contentKeywords("웅장하고 시네마틱하게")).toEqual([]);
+  });
+
+  it("제목에 키워드가 나오는지 (한 글자는 낱말일 때만)", async () => {
+    const { countKeywordHits } = await import("./style");
+    expect(countKeywordHits("Son 결승골 하이라이트", ["골"])).toBe(1);
+    expect(countKeywordHits("골프 대회", ["골"])).toBe(0);
+    expect(countKeywordHits("Best DUNK compilation", ["dunk"])).toBe(1);
+  });
+
+  it("결정적 동작·반응·감정 낱말을 장면 선호로", () => {
+    expect(parseStyle("골 장면 위주로").scene).toMatchObject({ impact: true, loud: true });
+    expect(parseStyle("골프 치는 장면").scene?.impact).toBeUndefined();
+    expect(parseStyle("우승 세리머니").scene).toMatchObject({ loud: true, people: true });
+    expect(parseStyle("눈물 나는 장면").scene).toMatchObject({ people: true });
+  });
+});
