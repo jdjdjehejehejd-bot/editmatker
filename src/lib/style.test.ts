@@ -206,3 +206,14 @@ describe("NSFW 성적 낱말 확장", () => {
     expect(parseStyle("에로틱 섹스 엣지").searchHints).toEqual([]);
   });
 });
+
+describe("NSFW 낱말을 편집 스타일 자동에서 읽음", () => {
+  it("편집 스타일의 \"특징에서 읽은 말\"에 성적 묘사가 나온다", () => {
+    const style = parseStyle("nsfw, 섹시한 비키니, 엣지");
+    expect(style.matched).toEqual(expect.arrayContaining(["섹시", "비키니", "엣지"]));
+  });
+
+  it("NSFW 표시가 없으면 읽은 말에 성적 묘사를 넣지 않는다", () => {
+    expect(parseStyle("비키니 엣지").matched).not.toContain("비키니");
+  });
+});

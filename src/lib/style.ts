@@ -418,7 +418,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   const tempoDown = !bpmMatch && !tempoUp && note(/느린 ?(?:비트|템포|음악|박자)|템포 ?느리|slow ?(?:beat|tempo)|down ?tempo/i);
   const bpm = bpmMatch ? clamp(Number(bpmMatch[1]), 60, 180) : clamp(preset.bpm + (tempoUp ? 15 : tempoDown ? -15 : 0), 60, 180);
 
-  const hintDictionary = nsfw ? [...HINT_DICTIONARY, ...NSFW_HINT_DICTIONARY] : HINT_DICTIONARY;
+  // NSFW 모드에서는 성적 묘사를 먼저 힌트로 잡습니다(힌트는 최대 4개라 뒤에 두면 밀릴 수 있음).
+  const hintDictionary = nsfw ? [...NSFW_HINT_DICTIONARY, ...HINT_DICTIONARY] : HINT_DICTIONARY;
   const searchHints = [...new Set(hintDictionary.filter(([re]) => re.test(text)).map(([, hint]) => hint))];
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
     // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
@@ -426,6 +427,13 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     // 편집 스타일을 말하는 영어 단어(fade, fast cuts, grain 등)는 영상 검색어로 쓰지 않습니다.
     const styleWord = [...Object.values(MOOD_KEYWORDS), ...GRADE_KEYWORDS.map(([, re]) => re), ...EFFECT_KEYWORDS.map(([, re]) => re), ...PACE_KEYWORDS.map(([, re]) => re), ...TRANSITION_KEYWORDS.map(([, re]) => re)].some(re => re.test(word));
     if (!styleWord && !/^(?:cuts?|edits?|style|no|without|beats?|tempo|transitions?|effects?|feel|vibe|mood)$/i.test(word) && searchHints.length < 4) searchHints.push(word.toLowerCase());
+  }
+  // NSFW 표시가 있으면 성적 묘사도 "특징에서 읽은 말"에 넣습니다(편집 스타일 자동 칸에 그대로 보입니다).
+  if (nsfw) {
+    for (const [re] of NSFW_HINT_DICTIONARY) {
+      const hit = re.exec(text)?.[0]?.trim();
+      if (hit) matched.add(hit);
+    }
   }
 
   return {
