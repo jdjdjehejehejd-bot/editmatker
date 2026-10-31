@@ -23,3 +23,23 @@ describe("analyzeTempo", () => {
     expect(Math.abs(info.dropTime - 12)).toBeLessThanOrEqual(2);
   });
 });
+
+describe("자동 작곡이 매번 다르게", () => {
+  it("씨앗이 다르면 조·화음 순서·드럼·멜로디가 달라지고, 같으면 같음", async () => {
+    const { pickVariation, variedProgression } = await import("./music");
+    const a = pickVariation("hype", 0.11);
+    expect(pickVariation("hype", 0.11)).toEqual(a);
+    const seeds = Array.from({ length: 12 }, (_, i) => (i + 1) / 13);
+    const shapes = new Set(seeds.map(seed => JSON.stringify([pickVariation("hype", seed), variedProgression("hype", pickVariation("hype", seed))])));
+    expect(shapes.size).toBeGreaterThan(8);
+  });
+
+  it("씨앗이 없으면 예전 곡 그대로", async () => {
+    const { pickVariation, variedProgression } = await import("./music");
+    const plain = pickVariation("cinematic");
+    expect(plain).toMatchObject({ transpose: 0, rotate: 0, swap: false, motif: [] });
+    expect(variedProgression("cinematic", plain)[0]).toEqual({ bass: 33, chord: [57, 60, 64] });
+    // 하이햇이 없는 분위기는 씨앗이 있어도 없음
+    expect(pickVariation("cinematic", 0.5).hats).toEqual([]);
+  });
+});

@@ -10,7 +10,7 @@ import { tailSeconds } from "./render";
 import { embed, frameScores, inferTopic, posterFrame, uploadFrames, type InferredTopic } from "./vision";
 import { addSimilarity, centroid, cosine, rerankBySimilarity } from "./similarity";
 import { sanitizeWeight, uploadGroupWeight } from "./uploads";
-import { downloadTrack, findFreeMusic, trackCredit, type FreeTrack } from "./freemusic";
+import { downloadTrack, findFreeMusic, rememberTrack, trackCredit, type FreeTrack } from "./freemusic";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
 import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, uploadedSource, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
@@ -332,6 +332,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
             try {
               const prepared = await prepareUserMusic(await downloadTrack(candidate, signal), input.seconds);
               track = candidate;
+              // 다음에는 다른 곡이 먼저 나오게 기억해 둡니다.
+              rememberTrack(candidate.id);
               return prepared;
             } catch (error) {
               if (signal.aborted) throw error;
@@ -579,7 +581,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const music = userMusic
     ? { buffer: userMusic.buffer, offset: userMusic.offset }
     : {
-        buffer: await synthesizeMusic({ mood: musicMood, bpm, duration: plan.duration + tailSeconds(input.showCredits), dropAt: plan.dropAt, outroAt }),
+        // 만들 때마다 다른 곡이 되도록 씨앗을 새로 뽑습니다(분위기·템포·드롭 위치는 그대로).
+        buffer: await synthesizeMusic({ mood: musicMood, bpm, duration: plan.duration + tailSeconds(input.showCredits), dropAt: plan.dropAt, outroAt, seed: Math.random() }),
         offset: 0,
       };
 
