@@ -1,6 +1,7 @@
 // YouTube·Reddit 검색. YouTube 영상은 로컬 도우미(helper/server.mjs)를 거쳐야 받을 수 있고,
 // Reddit은 도우미가 없으면 브라우저에서 직접 검색해 소리 없는 영상 파일을 씁니다.
 
+import { fetchWithTimeout } from "./net";
 import { describeError, type SearchStats, type SourceVideo } from "./sources";
 import { createTopicMatcher, expandQueries, type SearchQuery, type TopicInfo } from "./topic";
 
@@ -176,7 +177,7 @@ export async function searchYouTube(topic: TopicInfo, hints: string[], helper: s
   return searchAll(
     expandQueries(topic, hints),
     async query => {
-      const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=${query.weight < 1 ? 6 : 12}`, { signal });
+      const response = await fetchWithTimeout(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=${query.weight < 1 ? 6 : 12}`, { signal }, 25_000);
       if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `YouTube 검색 실패 (${response.status})`);
       return parseYouTubeSearch(await response.json(), helper, weightOffset(query));
     },
@@ -191,7 +192,7 @@ export function proxyBase() {
 }
 
 async function fetchJson(url: string, signal?: AbortSignal) {
-  const response = await fetch(url, { signal });
+  const response = await fetchWithTimeout(url, { signal }, 15_000);
   if (!response.ok) throw new Error((await response.json().catch(() => null))?.error ?? `응답 오류 ${response.status}`);
   return response.json();
 }
@@ -267,7 +268,7 @@ export async function searchReferenceEdits(topic: TopicInfo, helper: string | nu
           searchAll(
             queries,
             async query => {
-              const response = await fetch(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=8`, { signal });
+              const response = await fetchWithTimeout(`${helper}/api/youtube/search?q=${encodeURIComponent(query.q)}&limit=8`, { signal }, 25_000);
               if (!response.ok) throw new Error(`YouTube 검색 실패 (${response.status})`);
               return parseYouTubeSearch(await response.json(), helper, weightOffset(query));
             },

@@ -3,6 +3,7 @@
 // 입력값 하나만이 아니라 여러 검색어로 영상을 찾게 합니다.
 
 import { isTextAllowedWith, type ModerationOptions } from "./moderation";
+import { fetchWithTimeout } from "./net";
 
 export interface TopicInfo {
   query: string;
@@ -62,7 +63,7 @@ function api(base: string, params: Record<string, string>) {
 }
 
 async function getJson(url: string, signal?: AbortSignal): Promise<any> {
-  const response = await fetch(url, { signal });
+  const response = await fetchWithTimeout(url, { signal }, 10_000);
   if (!response.ok) throw new Error(`${new URL(url).hostname} 응답 오류 (${response.status})`);
   return response.json();
 }

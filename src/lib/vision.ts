@@ -5,6 +5,7 @@
 
 import { disposeVideo, loadVideo, seek } from "./analyze";
 import { isTextAllowed } from "./moderation";
+import { withTimeout } from "./net";
 
 export interface InferredTopic {
   /** 검색·해석에 쓸 말 */
@@ -196,7 +197,7 @@ const BATCH = 8;
 
 export async function describeFrames(frames: HTMLCanvasElement[]): Promise<{ vectors: Float32Array[]; probs: Float32Array[] }> {
   if (!frames.length) return { vectors: [], probs: [] };
-  const { tf, both } = await loadModel();
+  const { tf, both } = await withTimeout(loadModel(), 60_000);
   const vectors: Float32Array[] = [];
   const probs: Float32Array[] = [];
   for (let start = 0; start < frames.length; start += BATCH) {

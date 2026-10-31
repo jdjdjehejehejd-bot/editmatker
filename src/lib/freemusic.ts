@@ -2,6 +2,7 @@
 // 분위기에 맞는 곡을 찾아 받습니다. 키가 필요 없고, 2차 편집이 허용된 라이선스만 씁니다.
 // SoundCloud는 새 API 등록을 받지 않고 이용 약관상 곡을 내려받아 편집에 쓸 수 없어 연동하지 않습니다.
 
+import { fetchWithTimeout } from "./net";
 import { proxyBase } from "./social";
 import type { Mood } from "./style";
 
@@ -107,7 +108,7 @@ export async function findFreeMusic(mood: Mood, seconds: number, signal?: AbortS
   const picks = [queries[first], queries[(first + 1 + Math.floor(Math.random() * (queries.length - 1))) % queries.length]];
   const search = async (q: string, page: number) => {
     const params = new URLSearchParams({ q, category: "music", license_type: "modification", page_size: "20", page: String(page), mature: "false" });
-    const response = await fetch(`${OPENVERSE}?${params}`, { signal });
+    const response = await fetchWithTimeout(`${OPENVERSE}?${params}`, { signal }, 12_000);
     if (!response.ok) throw new Error(`무료 음악 검색 오류 (${response.status})`);
     return parseOpenverse(await response.json(), seconds);
   };

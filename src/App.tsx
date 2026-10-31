@@ -227,8 +227,14 @@ export default function App() {
     const controller = new AbortController();
     abortRef.current = controller;
     // 버튼을 누른 이 순간에 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
-    const audio = unlockAudio();
-    const releaseScreen = await keepScreenOn();
+    // 이 준비 단계에서 오류가 나도(오디오를 열 수 없는 브라우저 등) 조용히 멈추지 않고 그대로 진행합니다.
+    let audio: AudioContext | undefined;
+    try {
+      audio = unlockAudio();
+    } catch {
+      audio = undefined;
+    }
+    const releaseScreen = await keepScreenOn().catch(() => () => undefined);
     setRun({ specs: topicSpecs, style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle });
     setStatus("running");
     stageRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
@@ -271,7 +277,7 @@ export default function App() {
       setOutput({ url: URL.createObjectURL(rendered.blob), ext, file });
       setStatus("done");
     } catch (e) {
-      void audio.close().catch(() => undefined);
+      void audio?.close().catch(() => undefined);
       if (controller.signal.aborted) {
         setStatus("idle");
         setStep(null);

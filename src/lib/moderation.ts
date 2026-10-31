@@ -5,6 +5,8 @@
 // 2) 장면 검사 — NSFW.js(MobileNetV2) 모델로 영상 프레임을 분류해 선정적인 영상을 뺍니다.
 //    모델은 처음 필요할 때만 내려받고, 영상은 기기 밖으로 나가지 않습니다.
 
+import { withTimeout } from "./net";
+
 export type BlockCategory = "성적" | "욕설·혐오" | "폭력·잔혹" | "약물";
 
 interface Rule {
@@ -266,7 +268,8 @@ export async function screenFrames(frames: HTMLCanvasElement[], options: Moderat
   if (!frames.length) return { blocked: false, reason: null };
   let model: Classifier;
   try {
-    model = await loadClassifier();
+    // 모델을 받다가 멈추면 모든 영상이 끝없이 기다리므로 시간 제한을 둡니다.
+    model = await withTimeout(loadClassifier(), 60_000);
   } catch {
     return { blocked: true, reason: "장면 검열 모델을 불러오지 못해 안전을 위해 제외했어요" };
   }
