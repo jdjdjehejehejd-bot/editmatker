@@ -52,3 +52,33 @@ describe("장면 분류로 주제 고르기", () => {
       }
   });
 });
+
+describe("하나로 정하지 않고 공통 특징까지", () => {
+  const frame = (hot: Record<number, number>) => {
+    const probs = new Float32Array(1000);
+    for (const [i, p] of Object.entries(hot)) probs[Number(i)] = p;
+    return probs;
+  };
+
+  it("파일 이름: 공통으로 나오는 말 — 가장 많은 말이 주제, 나머지는 특징", async () => {
+    const { fileNameTopic } = await import("./vision");
+    expect(fileNameTopic(["뉴진스 해린 1.mp4", "뉴진스 해린 2.mp4", "뉴진스 민지.mp4"])).toEqual({ topic: "뉴진스", traits: ["해린"] });
+    expect(fileNameTopic(["손흥민 토트넘.mp4"])).toEqual({ topic: "손흥민", traits: ["토트넘"] });
+    expect(fileNameTopic(["son heung min goal.mp4"])).toEqual({ topic: "son heung min", traits: [] });
+  });
+
+  it("장면: 영상 절반 이상에 공통으로 보이는 묶음은 모두 주제로", async () => {
+    const { topicsFromVideos } = await import("./vision");
+    // 세 영상 모두 강아지, 두 영상은 해변도 보임
+    const videos = [
+      [frame({ 208: 0.5, 978: 0.3 }), frame({ 208: 0.4, 978: 0.2 })],
+      [frame({ 207: 0.5, 978: 0.4 }), frame({ 978: 0.3 })],
+      [frame({ 151: 0.7 })],
+    ];
+    const result = topicsFromVideos(videos)!;
+    expect(result.label).toBe("강아지");
+    expect(result.also?.map(t => t.label)).toEqual(["바다"]);
+    // 한 영상에만 보이는 묶음은 넣지 않음
+    expect(topicsFromVideos([[frame({ 208: 0.6 })], [frame({ 805: 0.6 })], [frame({ 208: 0.5 })]])!.also).toEqual([]);
+  });
+});

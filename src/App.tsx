@@ -912,7 +912,9 @@ export default function App() {
               )}
               {result?.inferredTopic && (
                 <p className="learned">
-                  <b>고른 주제</b> {result.inferredTopic.source === "features" ? "특징·분위기를" : `올린 영상의 ${result.inferredTopic.source === "filename" ? "파일 이름을" : "장면을"}`} 보고 "{result.inferredTopic.label}"(으)로 정했어요
+                  <b>고른 주제</b> {result.inferredTopic.source === "features" ? "특징·분위기를" : `올린 영상의 ${result.inferredTopic.source === "filename" ? "파일 이름을" : "장면을"}`} 보고{" "}
+                  {[result.inferredTopic, ...(result.inferredTopic.also ?? [])].map(t => `"${t.label}"`).join(" · ")}(으)로 정했어요
+                  {result.inferredTopic.traits?.length ? ` · 공통 특징: ${result.inferredTopic.traits.join(", ")}` : ""}
                   {result.inferredTopic.source === "vision" ? ` (확신 ${Math.round(result.inferredTopic.confidence * 100)}%)` : ""}
                 </p>
               )}

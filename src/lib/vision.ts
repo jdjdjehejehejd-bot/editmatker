@@ -15,6 +15,10 @@ export interface InferredTopic {
   source: "filename" | "vision" | "features";
   /** 0~1 (파일 이름이면 1) */
   confidence: number;
+  /** 함께 쓰는 다른 주제 — 하나로 정하지 않고, 여러 대상이 공통으로 나오면 모두 씁니다 */
+  also?: { term: string; label: string }[];
+  /** 주제와 함께 검색하고 제목에 나오면 우선할 공통 특징 낱말 (예: 무대, 골) — 따로 주제로 만들지는 않음 */
+  traits?: string[];
 }
 
 const MODEL_URL = "/models/mobilenet/model.json";
@@ -45,23 +49,38 @@ function nameWords(name: string): string[] {
 
 /** 파일 이름에서 주제를 고릅니다. 여러 파일이면 절반 이상에 나오는 말, 하나면 그 이름(최대 4단어). */
 export function topicFromFileNames(names: string[]): string | null {
+  return fileNameTopic(names)?.topic ?? null;
+}
+
+/**
+ * 파일 이름에서 주제와 공통 특징을 고릅니다.
+ * - 파일 하나: 로마자 이름은 통째로(예: "son heung min"), 우리말은 첫 낱말이 주제·나머지는 특징
+ * - 여러 파일: 절반 이상에 공통으로 나오는 말들 — 가장 많이 나오는 말이 주제, 나머지는 특징
+ */
+export function fileNameTopic(names: string[]): { topic: string; traits: string[] } | null {
   const lists = names.map(nameWords).filter(words => words.length);
   if (!lists.length) return null;
-  let topic: string | null = null;
-  if (names.length === 1) topic = lists[0].slice(0, 4).join(" ");
-  else {
+  let words: string[];
+  if (names.length === 1) {
+    const list = lists[0].filter(word => isTextAllowed(word));
+    words = list.every(word => !/[가-힣]/.test(word)) ? [list.slice(0, 4).join(" ")] : list.slice(0, 4);
+  } else {
     const counts = new Map<string, { word: string; count: number }>();
-    for (const words of lists) {
-      for (const word of new Set(words.map(w => w.toLowerCase()))) {
-        const entry = counts.get(word) ?? { word: words.find(w => w.toLowerCase() === word)!, count: 0 };
+    for (const list of lists) {
+      for (const word of new Set(list.map(w => w.toLowerCase()))) {
+        const entry = counts.get(word) ?? { word: list.find(w => w.toLowerCase() === word)!, count: 0 };
         entry.count++;
         counts.set(word, entry);
       }
     }
-    const best = [...counts.values()].sort((a, b) => b.count - a.count || b.word.length - a.word.length)[0];
-    if (best && best.count >= Math.ceil(names.length / 2)) topic = best.word;
+    words = [...counts.values()]
+      .filter(entry => entry.count >= Math.ceil(names.length / 2) && isTextAllowed(entry.word))
+      .sort((a, b) => b.count - a.count || b.word.length - a.word.length)
+      .slice(0, 4)
+      .map(entry => entry.word);
   }
-  return topic && isTextAllowed(topic) ? topic : null;
+  const [topic, ...traits] = words.filter(Boolean);
+  return topic ? { topic, traits } : null;
 }
 
 // ---------------------------------------------------------------------------
@@ -142,9 +161,8 @@ export async function frameScores(frames: HTMLCanvasElement[], target: ArrayLike
   };
 }
 
-/** 장면별 분류 확률(1000개)을 묶음별로 더해 평균 내고, 가장 높은 묶음을 고릅니다. */
-export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic | null {
-  if (!frames.length) return null;
+/** 장면들의 묶음별 평균 확률 */
+function categoryAverages(frames: ArrayLike<number>[]): Float64Array {
   const totals = new Float64Array(CATEGORIES.length);
   for (const probs of frames) {
     for (let i = 0; i < probs.length; i++) {
@@ -152,6 +170,44 @@ export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic
       if (c !== undefined) totals[c] += probs[i];
     }
   }
+  return totals.map(total => total / Math.max(1, frames.length));
+}
+
+/**
+ * 영상별 장면으로 주제를 고릅니다. 하나로 정하지 않고, 영상 절반 이상에 공통으로 보이는 묶음을 모두(최대 3개) 씁니다.
+ * 공통인 묶음이 없으면 전체에서 가장 많이 보인 묶음 하나.
+ */
+export function topicsFromVideos(videos: ArrayLike<number>[][]): InferredTopic | null {
+  const withFrames = videos.filter(frames => frames.length);
+  if (!withFrames.length) return null;
+  const overall = topicFromPredictions(withFrames.flat());
+  if (withFrames.length < 2) return overall;
+  const perVideo = withFrames.map(categoryAverages);
+  const need = Math.ceil(withFrames.length / 2);
+  const common = CATEGORIES.map((category, c) => ({
+    category,
+    seen: perVideo.filter(avg => avg[c] >= MIN_CONFIDENCE).length,
+    mean: perVideo.reduce((sum, avg) => sum + avg[c], 0) / perVideo.length,
+  }))
+    .filter(entry => entry.seen >= need)
+    .sort((a, b) => b.mean - a.mean)
+    .slice(0, 3);
+  if (!common.length) return overall;
+  const [first, ...rest] = common;
+  return {
+    term: first.category.term,
+    label: first.category.label,
+    source: "vision",
+    confidence: first.mean,
+    also: rest.map(entry => ({ term: entry.category.term, label: entry.category.label })),
+  };
+}
+
+/** 장면별 분류 확률(1000개)을 묶음별로 더해 평균 내고, 가장 높은 묶음을 고릅니다. */
+export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic | null {
+  if (!frames.length) return null;
+  const averages = categoryAverages(frames);
+  const totals = averages.map(avg => avg * frames.length);
   let best = 0;
   for (let c = 1; c < totals.length; c++) if (totals[c] > totals[best]) best = c;
   const confidence = totals[best] / frames.length;
@@ -326,14 +382,27 @@ async function grabFramesOnce(file: File, signal?: AbortSignal): Promise<HTMLCan
 
 /** 올린 영상들에서 주제를 고릅니다. 고르지 못하면 null (그러면 지금처럼 올린 영상만으로 만듦). */
 export async function inferTopic(files: File[], signal?: AbortSignal): Promise<InferredTopic | null> {
-  const fromName = topicFromFileNames(files.map(file => file.name));
-  if (fromName) return { term: fromName, label: fromName, source: "filename", confidence: 1 };
+  const fromName = fileNameTopic(files.map(file => file.name));
+  if (fromName) return { term: fromName.topic, label: fromName.topic, source: "filename", confidence: 1, traits: fromName.traits };
   // 장면을 뽑는 동안 모델도 받습니다.
   preloadVision();
-  const frames = await uploadFrames(files, signal);
+  const perFile: HTMLCanvasElement[][] = [];
+  for (const file of files.slice(0, 6)) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    perFile.push(await grabFrames(file, signal).catch(() => []));
+  }
+  const frames = perFile.flat();
   if (!frames.length) return null;
   try {
-    return topicFromPredictions(await classify(frames));
+    // 한 번에 분류한 뒤 영상별로 다시 나눕니다.
+    const probs = await classify(frames);
+    let offset = 0;
+    const videos = perFile.map(list => {
+      const own = probs.slice(offset, offset + list.length);
+      offset += list.length;
+      return own;
+    });
+    return topicsFromVideos(videos);
   } catch (error) {
     if (signal?.aborted) throw error;
     return null;

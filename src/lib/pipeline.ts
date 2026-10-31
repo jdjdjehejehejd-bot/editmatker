@@ -155,26 +155,40 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   if (!specs.length && input.features.trim()) {
     events.step("topic", "특징·분위기를 보고 주제를 고르는 중");
     inferred = await topicFromFeatures(input.features, style.keywords ?? [], signal, policy);
-    if (inferred) specs = [{ term: inferred.term, weight: 1 }];
   }
-  if (!specs.length && uploads.length) {
+  if (!specs.length && !inferred && uploads.length) {
     events.step("topic", "올린 영상을 보고 비슷한 주제를 고르는 중");
     inferred = await inferTopic(uploads, signal).catch(error => {
       if (signal.aborted) throw error;
       return null;
     });
-    if (inferred && !checkUserInput(inferred.term, "")) specs = [{ term: inferred.term, weight: 1 }];
-    else inferred = null;
+    if (inferred && checkUserInput(inferred.term, "")) inferred = null;
+  }
+  if (!specs.length && inferred) {
+    // 하나로 정하지 않고: 공통으로 나오는 대상은 모두 주제로(같은 비중), 일반적인 특징은 함께 검색·우선할 낱말로 씁니다.
+    const allowed = [inferred, ...(inferred.also ?? [])].filter(t => !checkUserInput(t.term, ""));
+    specs = allowed.map(t => ({ term: t.term, weight: 1 }));
+    const traits = (inferred.traits ?? []).filter(word => !checkUserInput(word, ""));
+    if (traits.length) {
+      style = {
+        ...style,
+        searchHints: [...new Set([...traits, ...style.searchHints])].slice(0, 4),
+        keywords: [...new Set([...(style.keywords ?? []), ...traits])],
+      };
+    }
   }
   if (!specs.length && !uploads.length) throw new Error("특징·분위기에서 주제를 찾지 못했어요. 주제 칸에 인물·대상을 적거나 편집할 영상을 올려 주세요.");
 
   if (specs.length) events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
   // 장면으로 고른 주제는 우리말 이름("강아지")을 제목에 쓰고, Wikidata 이름("개")은 다른 이름으로 남겨 검색·관련성에 씁니다.
-  if (inferred?.source === "vision" && infos[0]) {
-    const info = infos[0];
-    if (info.label !== inferred.label) info.aliases = [...new Set([info.label, ...(info.aliases ?? [])])];
-    info.label = inferred.label;
+  if (inferred?.source === "vision") {
+    [inferred, ...(inferred.also ?? [])].forEach((picked, i) => {
+      const info = infos[i];
+      if (!info) return;
+      if (info.label !== picked.label) info.aliases = [...new Set([info.label, ...(info.aliases ?? [])])];
+      info.label = picked.label;
+    });
   }
   // 검열: 주제가 가리키는 대상(영어 이름, 설명)이 부적절하면 생성하지 않습니다.
   const badTopic = infos.find(info => !isTopicAllowed(info, policy));
@@ -700,10 +714,15 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile), relatedUsed: loaded.filter(s => s.relatedOnly).length, wanted: slots };
 }
 
+/** 구체적인 대상(사람·그룹·팀·장소·작품·브랜드)인지 — 이런 대상은 주제로, 아닌 말(무대·바다·골)은 공통 특징으로 씁니다 */
+const SPECIFIC_ENTITY = /group|band|duo|team|club|league|city|country|province|island|singer|rapper|actor|actress|player|footballer|athlete|idol|film|movie|series|drama|anime|video game|game|company|brand|album|song|festival|tournament|그룹|밴드|팀|구단|리그|도시|나라|국가|섬|가수|래퍼|배우|선수|아이돌|영화|드라마|애니|게임|회사|기업|브랜드|앨범|노래|축제|대회/i;
+
 /**
- * 특징·분위기 문장에서 주제를 고릅니다. 문장의 내용 키워드(스타일 낱말·일반적인 말 제외) 가운데
- * 실제로 적힌 말만 후보로 삼고(번역된 검색 힌트는 제외), 두 글자 이상을 먼저, 앞에 나온 순서대로 Wikidata에서 찾아
- * 처음 찾아지는 대상을 씁니다. 하나도 찾아지지 않으면 null.
+ * 특징·분위기 문장에서 주제와 공통 특징을 고릅니다. 하나로 정하지 않고:
+ * - 문장의 내용 키워드(스타일 낱말·일반적인 말 제외) 가운데 실제로 적힌 말만 후보(두 글자 이상 먼저, 앞에 나온 순서, 최대 4개)
+ * - Wikidata에서 찾아지는 구체적인 대상(사람·그룹·팀·장소 등)은 모두 주제(최대 3개)
+ * - 나머지(일반적인 말, 못 찾은 말)는 공통 특징 — 주제와 함께 검색하고 제목에 나오면 우선
+ * 구체적인 대상이 없으면 처음 찾아지는 말을 주제로. 하나도 찾아지지 않으면 null.
  */
 async function topicFromFeatures(features: string, keywords: string[], signal: AbortSignal, policy: ModerationOptions): Promise<InferredTopic | null> {
   const text = features.toLowerCase();
@@ -711,7 +730,7 @@ async function topicFromFeatures(features: string, keywords: string[], signal: A
     .filter(word => text.includes(word.toLowerCase()) && !checkUserInput(word, ""))
     .map((word, index) => ({ word, index }))
     .sort((a, b) => Number(b.word.length >= 2) - Number(a.word.length >= 2) || a.index - b.index)
-    .slice(0, 3)
+    .slice(0, 4)
     .map(entry => entry.word);
   if (!candidates.length) return null;
   const infos = await Promise.all(
@@ -722,8 +741,23 @@ async function topicFromFeatures(features: string, keywords: string[], signal: A
       })
     )
   );
-  const found = infos.findIndex(info => info && isTopicAllowed(info, policy) && (info.englishLabel || info.description));
-  return found >= 0 ? { term: candidates[found], label: infos[found]!.label, source: "features", confidence: 1 } : null;
+  const found = candidates
+    .map((word, i) => ({ word, info: infos[i] }))
+    .filter((entry): entry is { word: string; info: TopicInfo } => Boolean(entry.info && isTopicAllowed(entry.info, policy) && (entry.info.englishLabel || entry.info.description)));
+  if (!found.length) return null;
+  const isSpecific = (info: TopicInfo) => Boolean(info.person || info.sports || SPECIFIC_ENTITY.test(info.description ?? ""));
+  const specific = found.filter(entry => isSpecific(entry.info)).slice(0, 3);
+  const topics = specific.length ? specific : found.slice(0, 1);
+  const chosen = new Set(topics.map(entry => entry.word));
+  const [first, ...rest] = topics;
+  return {
+    term: first.word,
+    label: first.info.label,
+    source: "features",
+    confidence: 1,
+    also: rest.map(entry => ({ term: entry.word, label: entry.info.label })),
+    traits: candidates.filter(word => !chosen.has(word)),
+  };
 }
 
 /** 참고 에딧(올린 파일 + 인터넷에서 찾은 에딧, 합쳐 최대 3개)을 분석해 스타일 프로필을 만듭니다. 실패해도 생성은 계속합니다. */
