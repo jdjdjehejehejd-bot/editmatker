@@ -3,7 +3,7 @@
 import { analyzeVideo, type VideoAnalysis } from "./analyze";
 import { isMobile, LIMITS } from "./device";
 import { checkUserInput, GenerationBlockedError, type ModerationOptions, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
-import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
+import { assessVideo, pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
@@ -22,6 +22,9 @@ import { applyOverrides, defaultBpm, parseStyle, type EditStyle, type Mood, type
 
 export type StepId = "topic" | "search" | "learn" | "download" | "analyze" | "plan" | "render";
 
+/** 거의 멈춘 영상을 건너뛸 때의 이유 */
+const STILL_VIDEO = "거의 멈춰 있는 영상(사진 모음·슬라이드쇼)이라 건너뛰었어요";
+
 export interface LoadedSource extends SourceVideo {
   url: string;
   analysis: VideoAnalysis;
@@ -29,6 +32,8 @@ export interface LoadedSource extends SourceVideo {
   highlights: Highlight[];
   /** 이 영상을 찾은 주제 */
   topicLabel: string;
+  /** 0~1 영상 전체가 얼마나 살아 있는지 (직접 올린 영상은 1) */
+  quality?: number;
 }
 
 export interface PipelineInput {
@@ -450,6 +455,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   // 같은 출처에서 받기가 연달아 실패하면(예: Reddit 영상 서버가 막힘) 그 출처의 나머지는 받지 않고 건너뜁니다 —
   // 모두 같은 이유로 실패해 시간과 데이터만 쓰지 않게. 한 번이라도 받아지면 다시 셉니다.
   const failStreak = new Map<string, number>();
+  /** 거의 멈춘 영상이라 건너뛴 후보 — 다른 영상으로 칸을 다 못 채우면 마지막에 씁니다 */
+  const stillBackups = new Map<TopicResult, SourceVideo[]>();
   const blockedProviders = new Map<string, string>();
   const isDownloadFailure = (reason: string) => reason.startsWith("다운로드 실패") || reason.includes("접속이 막혔어요");
 
@@ -513,7 +520,16 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         // 스포츠 영상은 펀치·슛 같은 결정적 순간이 있는 구간을 우선합니다(걷기·세리머니·견제만 하는 장면은 뒤로).
         const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact) });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
-        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
+        // 의미 없는 장면만 나열되지 않게: 거의 내내 멈춘 영상(사진 모음·슬라이드쇼·배경화면 영상)은
+        // 다른 후보가 남아 있으면 건너뜁니다(직접 올린 영상은 그대로 씀). 쓰더라도 덜 살아 있는 영상은 덜 나오게 합니다.
+        const quality = assessVideo(analysis.samples);
+        const others = cursor.get(topic)! < topic.candidates.length || queues.get(topic)!.length > 0;
+        if (!candidate.file && quality.still && !candidate.allowStill && others) {
+          // 칸이 끝내 모자라면 맨 끝에 다시 쓸 수 있게 남겨 둡니다.
+          stillBackups.set(topic, [...(stillBackups.get(topic) ?? []), candidate]);
+          throw new Error(STILL_VIDEO);
+        }
+        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label, quality: candidate.file ? 1 : quality.score };
         failStreak.set(candidate.provider, 0);
         loaded.push(source);
         loadedBy.get(topic)!.push(source);
@@ -529,6 +545,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           continue;
         }
         const reason = describeError(error);
+        // 거의 멈춘 영상은 마지막에 쓸 수도 있으니, 끝까지 안 쓰였을 때만 "건너뛴 영상"에 알립니다(아래).
+        if (reason === STILL_VIDEO) continue;
         failures.push(`${candidate.provider} "${candidate.title.slice(0, 40)}": ${reason}`);
         if (!topicFailures.has(topic)) topicFailures.set(topic, reason);
         events.skipped(candidate, reason);
@@ -586,10 +604,14 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     // 2) 영상이 모자란 주제가 있으면 남은 칸을 다른 주제의 다음 후보로 채웁니다.
     // 3) 그래도 모자라면(제목에 이름이 나오는 영상이 적을 때) 관련 주제가 제목에 나오는 영상으로 채웁니다.
     //    예전에는 여기서 멈춰서, 영상을 여러 개 고르게 해도 1개만 쓰는 일이 있었습니다.
-    for (const fallback of [false, true]) {
-      if (fallback) {
+    // 4) 그래도 모자라면 거의 멈춘 영상이라 건너뛴 것도 씁니다(영상 수를 줄이기보다는 낫게, 비중은 낮게).
+    for (const phase of ["named", "related", "still"] as const) {
+      if (phase !== "named") {
         if (loaded.length >= slots) break;
-        for (const { t } of byWeight) if (t.related?.length) t.candidates = [...t.candidates, ...t.related.map(source => ({ ...source, relatedOnly: true }))];
+        for (const { t } of byWeight) {
+          const extra = phase === "related" ? (t.related ?? []).map(source => ({ ...source, relatedOnly: true })) : (stillBackups.get(t) ?? []).map(source => ({ ...source, allowStill: true }));
+          if (extra.length) t.candidates = [...t.candidates, ...extra];
+        }
       }
       for (let progress = true; loaded.length < slots && progress; ) {
         progress = false;
@@ -602,6 +624,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   } finally {
     discardPrefetched();
   }
+  const usedIds = new Set(loaded.map(s => s.id));
+  for (const list of stillBackups.values()) for (const source of list) if (!usedIds.has(source.id)) events.skipped(source, STILL_VIDEO);
 
   if (!loaded.length) {
     const more = failures.length > 6 ? `\n…외 ${failures.length - 6}개` : "";
@@ -617,8 +641,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   for (const t of active) {
     const sources = loadedBy.get(t)!;
     // 주제 안에서는 영상마다 똑같이, 올린 영상은 파일 가중치 비율대로 나눕니다.
-    const sourceWeightSum = sources.reduce((sum, s) => sum + (s.uploadWeight ?? 1), 0);
-    for (const source of sources) for (const h of source.highlights) h.weight = ((t.weight / usedWeight) * (source.uploadWeight ?? 1)) / sourceWeightSum;
+    // 같은 주제 안에서 덜 살아 있는 영상은 덜 나오게(최소 30%). 주제 안에서 나누므로 주제 전체의 비중은 그대로입니다.
+    const share = (source: LoadedSource) => (source.uploadWeight ?? 1) * (0.3 + 0.7 * (source.quality ?? 1));
+    const sourceWeightSum = sources.reduce((sum, s) => sum + share(s), 0);
+    for (const source of sources) for (const h of source.highlights) h.weight = ((t.weight / usedWeight) * share(source)) / sourceWeightSum;
   }
 
   events.step("plan", "비트에 맞춰 컷을 배치하는 중");
