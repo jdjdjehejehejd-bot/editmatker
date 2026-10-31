@@ -287,7 +287,8 @@ export default function App() {
   const share = async () => {
     if (!output) return;
     try {
-      await navigator.share({ files: [output.file], title: `${topic} edit` });
+      // 주제 칸이 비어 있어도(올린 영상만 쓴 경우) 실제 에딧 제목으로 공유합니다.
+      await navigator.share({ files: [output.file], title: `${result?.title ?? (topic.trim() || "editmatker")} edit` });
     } catch {
       /* 사용자가 공유를 취소함 */
     }

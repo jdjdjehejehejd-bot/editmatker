@@ -128,11 +128,6 @@ export function subjectProbability(probs: ArrayLike<number>, terms: string[]): n
 }
 
 /** 장면들에 특징 문장이 말한 대상이 얼마나 보이는지 */
-export async function subjectScores(frames: HTMLCanvasElement[], terms: string[]): Promise<number[]> {
-  if (!frames.length || !terms.length) return [];
-  return (await classify(frames)).map(probs => subjectProbability(probs, terms));
-}
-
 /**
  * 장면들의 "상대편과 닮은 정도"와 "말한 대상이 보이는 정도"를 모델 한 번으로 함께 잽니다.
  * target이 없으면 닮은 정도는, terms가 비면 대상은 건너뜁니다.
@@ -193,20 +188,34 @@ export function preloadVision() {
 }
 
 /** 장면들을 한 번(배치)에 모델에 넣어 특징 벡터와 분류 확률을 함께 얻습니다(입력 -1~1). */
+/**
+ * 속도: 모델에 넣는 장면 수(배치 크기)가 매번 다르면(4, 10, 12장…) TensorFlow가 GPU 프로그램을 새로 만드는데,
+ * 이게 실제 계산보다 훨씬 오래 걸립니다. 그래서 늘 같은 크기(BATCH장)로 묶고 모자라면 마지막 장면을 되풀이해 채웁니다.
+ */
+const BATCH = 8;
+
 export async function describeFrames(frames: HTMLCanvasElement[]): Promise<{ vectors: Float32Array[]; probs: Float32Array[] }> {
   if (!frames.length) return { vectors: [], probs: [] };
   const { tf, both } = await loadModel();
-  const input = tf.tidy(() => tf.stack(frames.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
-  const [embedding, prediction] = both.predict(input) as Tensor[];
-  const split = async (tensor: Tensor) => {
-    const size = tensor.shape[tensor.shape.length - 1];
-    const flat = await tensor.data();
-    tensor.dispose();
-    return frames.map((_, f) => flat.slice(f * size, (f + 1) * size));
-  };
-  const [vectors, raw] = await Promise.all([split(embedding), split(prediction)]);
-  input.dispose();
-  return { vectors, probs: raw.map(toProbabilities) };
+  const vectors: Float32Array[] = [];
+  const probs: Float32Array[] = [];
+  for (let start = 0; start < frames.length; start += BATCH) {
+    const chunk = frames.slice(start, start + BATCH);
+    const padded = [...chunk, ...Array.from({ length: BATCH - chunk.length }, () => chunk[chunk.length - 1])];
+    const input = tf.tidy(() => tf.stack(padded.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
+    const [embedding, prediction] = both.predict(input) as Tensor[];
+    const split = async (tensor: Tensor) => {
+      const size = tensor.shape[tensor.shape.length - 1];
+      const flat = await tensor.data();
+      tensor.dispose();
+      return chunk.map((_, f) => flat.slice(f * size, (f + 1) * size));
+    };
+    const [v, p] = await Promise.all([split(embedding), split(prediction)]);
+    input.dispose();
+    vectors.push(...v);
+    probs.push(...p.map(toProbabilities));
+  }
+  return { vectors, probs };
 }
 
 /** 출력이 확률이 아니면 softmax로 바꿉니다. */
