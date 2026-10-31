@@ -194,3 +194,15 @@ describe("NSFW 특징", () => {
     expect(parseStyle("섹시한 댄스").searchHints).toEqual(["dance"]);
   });
 });
+
+describe("NSFW 성적 낱말 확장", () => {
+  it("에로틱·섹슈얼·섹스·엣지도 검색 힌트로 인식한다", () => {
+    const style = parseStyle("nsfw, 에로틱한 무드, 섹슈얼, 섹스, 엣지");
+    expect(style.searchHints).toEqual(expect.arrayContaining(["erotic", "sexual", "sex", "ecchi"]));
+    expect(style.searchHints).not.toContain("nsfw");
+  });
+
+  it("NSFW 표시가 없으면 새 낱말도 검색어로 쓰지 않는다", () => {
+    expect(parseStyle("에로틱 섹스 엣지").searchHints).toEqual([]);
+  });
+});

@@ -340,6 +340,11 @@ const NSFW_HINT_DICTIONARY: [RegExp, string][] = [
   [/비키니|수영복|비치웨어|bikini|swimsuit/i, "bikini"],
   [/란제리|링제리|속옷|브래지어|언더웨어|lingerie|underwear/i, "lingerie"],
   [/섹시|야한|야하게|선정적|관능|유혹|노출|sexy|sensual|seductive/i, "sexy"],
+  [/에로틱|에로|erotic|erotica/i, "erotic"],
+  [/섹슈얼|sexual/i, "sexual"],
+  [/섹스|\bsex\b/i, "sex"],
+  // 엣지는 일본어 エッチ를 옮긴 표현입니다.
+  [/엣지|엣치|에치|エッチ|ecchi|etchi/i, "ecchi"],
   [/누드|나체|벗은|벗고|탈의|nude|naked/i, "nude"],
   [/몸매|글래머|볼륨|glamour|curvy/i, "curvy"],
   [/폴댄스|봉춤|스트립|pole ?dance|striptease/i, "pole dance"],
