@@ -348,9 +348,11 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           person: infos.some(info => info.person),
         },
         // 모두 ×1이면 찾은 영상과 반반, 가중치를 올리면 올린 영상 쪽 비중이 커집니다.
+        // ×1 = 찾은 영상 하나와 같은 비중. 여기서는 고른 영상 수로 어림하고, 실제로 받은 수로 아래에서 다시 맞춥니다.
         weight: uploadGroupWeight(
           specs.reduce((sum, spec) => sum + spec.weight, 0),
-          uploads.map((_, i) => sanitizeWeight(input.uploadWeights?.[i] ?? 1))
+          uploads.map((_, i) => sanitizeWeight(input.uploadWeights?.[i] ?? 1)),
+          searching && specs.length ? input.sourceCount : 0
         ),
         queries: [],
         // 가중치가 큰 파일부터 받아, 칸이 모자라도 중요한 영상이 먼저 들어가게 합니다.
@@ -725,6 +727,16 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   }
 
   // 편집에서 각 주제가 비중만큼 나오도록, 주제 비중을 그 주제의 영상 수로 나눠 영상마다 나눠 줍니다.
+  // 올린 영상의 비중을 실제로 받은 찾은 영상 수로 다시 맞춥니다(×1 = 찾은 영상 하나와 같은 비중).
+  if (uploadTopic) {
+    const onlineUsed = active.filter(t => t !== uploadTopic && loadedBy.get(t)!.length);
+    const onlineCount = onlineUsed.reduce((sum, t) => sum + loadedBy.get(t)!.length, 0);
+    uploadTopic.weight = uploadGroupWeight(
+      onlineUsed.reduce((sum, t) => sum + t.weight, 0),
+      loadedBy.get(uploadTopic)!.map(s => s.uploadWeight ?? 1),
+      onlineCount
+    );
+  }
   const usedWeight = active.filter(t => loadedBy.get(t)!.length).reduce((sum, t) => sum + t.weight, 0);
   for (const t of active) {
     const sources = loadedBy.get(t)!;
