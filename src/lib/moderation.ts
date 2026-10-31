@@ -247,19 +247,36 @@ export function judgeFrames(frames: FrameVerdict[], options: ModerationOptions =
 type Classifier = { classify(input: HTMLCanvasElement): Promise<{ className: string; probability: number }[]> };
 let classifier: Promise<Classifier> | null = null;
 
-/** NSFW.js 모델을 처음 쓸 때 한 번만 불러옵니다(약 3.5MB, 별도 파일로 나뉘어 있음). */
+/** 모델을 불러오지 못한 마지막 이유 (화면에 알맞은 안내를 보여 주려고) */
+export let classifierError: unknown = null;
+
+/**
+ * NSFW.js 모델을 처음 쓸 때 한 번만 불러옵니다(약 3.5MB, 별도 파일로 나뉘어 있음).
+ * 휴대폰에서 그래픽 가속(WebGL) 준비가 실패하면 느리더라도 CPU로 한 번 더 시도합니다.
+ */
 function loadClassifier(): Promise<Classifier> {
   classifier ??= (async () => {
     const [tf, { load }, { MobileNetV2Model }] = await Promise.all([import("@tensorflow/tfjs"), import("nsfwjs/core"), import("nsfwjs/models/mobilenet_v2")]);
     tf.enableProdMode();
     await tf.ready();
-    return (await load("MobileNetV2", { modelDefinitions: [MobileNetV2Model] })) as unknown as Classifier;
+    try {
+      return (await load("MobileNetV2", { modelDefinitions: [MobileNetV2Model] })) as unknown as Classifier;
+    } catch (error) {
+      if (tf.getBackend() === "cpu") throw error;
+      await tf.setBackend("cpu");
+      await tf.ready();
+      return (await load("MobileNetV2", { modelDefinitions: [MobileNetV2Model] })) as unknown as Classifier;
+    }
   })().catch(error => {
+    classifierError = error;
     classifier = null;
     throw error;
   });
   return classifier;
 }
+
+/** 장면 검열 모델을 못 불러와 영상을 뺄 때의 이유 */
+export const MODEL_FAILED = "장면 검열 모델을 불러오지 못해 안전을 위해 제외했어요";
 
 /** 미리 불러 두기 (영상 받는 동안 모델도 받아 두면 기다림이 줄어듭니다). NSFW 모드에서는 모델을 받지 않습니다. */
 export function preloadClassifier(options: ModerationOptions = {}) {
@@ -276,7 +293,12 @@ export async function screenFrames(frames: HTMLCanvasElement[], options: Moderat
   try {
     model = await loadClassifier();
   } catch {
-    return { blocked: true, reason: "장면 검열 모델을 불러오지 못해 안전을 위해 제외했어요" };
+    // 잠깐 끊긴 경우를 위해 한 번 더 시도합니다(실패한 결과는 기억하지 않으므로 새로 불러옴).
+    try {
+      model = await loadClassifier();
+    } catch {
+      return { blocked: true, reason: MODEL_FAILED };
+    }
   }
   const verdicts: FrameVerdict[] = [];
   for (const frame of frames) {

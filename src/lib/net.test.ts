@@ -30,3 +30,14 @@ describe("시간 제한", () => {
     await expect(withTimeout(new Promise(() => undefined), 20)).rejects.toBeInstanceOf(TimeoutError);
   });
 });
+
+describe("새 버전 확인", () => {
+  it("index.html에서 시작 스크립트를 읽고, 필요한 파일을 못 받은 오류를 알아봄", async () => {
+    const { entryFromHtml, isChunkLoadError } = await import("./version");
+    expect(entryFromHtml('<script type="module" crossorigin src="./assets/index-ABC.js"></script>')).toBe("/assets/index-ABC.js");
+    expect(entryFromHtml("<html></html>")).toBeNull();
+    expect(isChunkLoadError(new TypeError("Failed to fetch dynamically imported module: https://x/assets/a.js"))).toBe(true);
+    expect(isChunkLoadError(new TypeError("Importing a module script failed."))).toBe(true);
+    expect(isChunkLoadError(new Error("WebGL is not supported"))).toBe(false);
+  });
+});

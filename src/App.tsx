@@ -1,8 +1,9 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FRAMING_LABEL, type Framing } from "./lib/framing";
 import { preloadVision, topicFromFileNames } from "./lib/vision";
+import { isOutdated, OUTDATED_MESSAGE, saveDraft, takeDraft } from "./lib/version";
 import { UPLOAD_WEIGHTS, uploadKey, uploadShares } from "./lib/uploads";
-import { DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
+import { sanitizeOverlay, DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
 import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
 import { canShareFile, isMobile, keepScreenOn, LIMITS, unlockAudio } from "./lib/device";
@@ -124,6 +125,8 @@ export default function App() {
   }, []);
   useEffect(() => () => void (stepTimer.current && clearTimeout(stepTimer.current)), []);
   const [error, setError] = useState<string | null>(null);
+  /** 이 페이지를 연 뒤 새 버전이 배포됨 — 필요한 파일을 받지 못하므로 새로고침을 권합니다 */
+  const [outdated, setOutdated] = useState(false);
   const [candidates, setCandidates] = useState<SourceVideo[]>([]);
   const [queries, setQueries] = useState<QueryGroup[]>([]);
   const [loaded, setLoaded] = useState<LoadedSource[]>([]);
@@ -247,10 +250,7 @@ export default function App() {
       return;
     }
     setStartHint(null);
-    reset();
-    const controller = new AbortController();
-    abortRef.current = controller;
-    // 버튼을 누른 이 순간에 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
+    // 버튼을 누른 이 순간에(기다리기 전에) 오디오를 깨워야 iOS에서 음악이 녹음됩니다.
     // 이 준비 단계에서 오류가 나도(오디오를 열 수 없는 브라우저 등) 조용히 멈추지 않고 그대로 진행합니다.
     let audio: AudioContext | undefined;
     try {
@@ -258,6 +258,16 @@ export default function App() {
     } catch {
       audio = undefined;
     }
+    // 새 버전이 배포됐으면(배포 전에 열어 둔 페이지) 필요한 파일을 받지 못해 중간에 실패하므로 먼저 알려 줍니다.
+    if (await isOutdated()) {
+      void audio?.close().catch(() => undefined);
+      setOutdated(true);
+      setStartHint(OUTDATED_MESSAGE);
+      return;
+    }
+    reset();
+    const controller = new AbortController();
+    abortRef.current = controller;
     const releaseScreen = await keepScreenOn().catch(() => () => undefined);
     setRun({ specs: parseTopicInput(typedTopic), style: preview, aspect, hasMusic: Boolean(musicFile), musicStyle });
     setStatus("running");
@@ -313,6 +323,38 @@ export default function App() {
       releaseScreen();
     }
   };
+
+  /** 입력을 잠깐 저장해 두고 새로고침합니다(올린 파일은 브라우저가 보관할 수 없어 다시 골라야 함). */
+  const reloadKeepingInputs = () => {
+    saveDraft({ topic: topicRef.current?.value ?? topic, features: featuresRef.current?.value ?? features, seconds, aspect, sourceCount, licenseMode, musicStyle, freeMusic, overrides, overlay, framing, uploadsOnly, learnOnline });
+    location.reload();
+  };
+
+  // 새로고침 전에 저장해 둔 입력을 되살립니다.
+  useEffect(() => {
+    const draft = takeDraft();
+    if (!draft) return;
+    if (typeof draft.topic === "string") setTopic(draft.topic);
+    if (typeof draft.features === "string") setFeatures(draft.features);
+    if (typeof draft.seconds === "number") setSeconds(draft.seconds);
+    if (typeof draft.aspect === "string") setAspect(draft.aspect as Aspect);
+    if (typeof draft.sourceCount === "number") setSourceCount(Math.min(draft.sourceCount, LIMITS.maxSources));
+    if (draft.licenseMode === "any" || draft.licenseMode === "reusable") setLicenseMode(draft.licenseMode);
+    if (typeof draft.musicStyle === "string") setMusicStyle(draft.musicStyle as MusicStyle);
+    if (typeof draft.freeMusic === "boolean") setFreeMusic(draft.freeMusic);
+    if (draft.overrides && typeof draft.overrides === "object") setOverrides(draft.overrides as StyleOverrides);
+    if (draft.overlay) setOverlay(sanitizeOverlay(draft.overlay));
+    if (draft.framing === "auto" || draft.framing === "fill" || draft.framing === "fit") setFraming(draft.framing);
+    if (typeof draft.uploadsOnly === "boolean") setUploadsOnly(draft.uploadsOnly);
+    if (typeof draft.learnOnline === "boolean") setLearnOnline(draft.learnOnline);
+  }, []);
+
+  // 필요할 때 받는 파일을 받지 못하면(새 배포 뒤 예전 페이지) 새로고침 안내를 띄웁니다.
+  useEffect(() => {
+    const onPreloadError = () => setOutdated(true);
+    window.addEventListener("vite:preloadError", onPreloadError);
+    return () => window.removeEventListener("vite:preloadError", onPreloadError);
+  }, []);
 
   const share = async () => {
     if (!output) return;
@@ -823,6 +865,11 @@ export default function App() {
                 {startHint}
               </p>
             )}
+            {outdated && status !== "running" && (
+              <button type="button" className="chip refresh" onClick={reloadKeepingInputs}>
+                새 버전으로 새로고침 (입력은 그대로)
+              </button>
+            )}
           </section>
 
           <article className="card reel" ref={stageRef}>
@@ -966,6 +1013,11 @@ export default function App() {
                 </div>
               )}
               {error && <p className={`error ${isBlockedError ? "blocked" : ""}`}>{isBlockedError ? `🚫 ${error}` : error}</p>}
+              {error && (error === OUTDATED_MESSAGE || error.includes("새로고침")) && (
+                <button type="button" className="chip refresh" onClick={reloadKeepingInputs}>
+                  새로고침 (입력은 그대로)
+                </button>
+              )}
               {output && (
                 <div className="actions">
                   {canShareFile(output.file) ? (
