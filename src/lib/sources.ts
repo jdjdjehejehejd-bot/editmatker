@@ -37,6 +37,8 @@ export interface SourceVideo {
   uploadWeight?: number;
   /** 제목에 주제 이름은 없고 관련 주제만 나오는 영상 (칸이 모자라 채운 것) */
   relatedOnly?: boolean;
+  /** fallbackUrl까지 막히면 차례로 시도할 다른 주소 (예: Reddit의 미리보기 영상) */
+  alternates?: string[];
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
   fallbackUrl?: string;
   poster: string | null;
@@ -554,12 +556,18 @@ export async function downloadSource(
     onProgress(1);
     return source.file;
   }
-  try {
-    return await downloadFrom(source.mediaUrl, source.bytes, onProgress, signal, maxBytes);
-  } catch (error) {
-    if (signal?.aborted || !source.fallbackUrl) throw error;
-    return downloadFrom(source.fallbackUrl, source.bytes, onProgress, signal, maxBytes);
+  // 원래 주소 → 프록시 → 다른 주소들 순서로, 받아질 때까지 시도합니다. 모두 실패하면 마지막 오류를 알려 줍니다.
+  const urls = [source.mediaUrl, source.fallbackUrl, ...(source.alternates ?? [])].filter((url, i, list): url is string => Boolean(url) && list.indexOf(url) === i);
+  let lastError: unknown = new Error("다운로드 실패");
+  for (const url of urls) {
+    try {
+      return await downloadFrom(url, source.bytes, onProgress, signal, maxBytes);
+    } catch (error) {
+      if (signal?.aborted) throw error;
+      lastError = error;
+    }
   }
+  throw lastError;
 }
 
 async function downloadFrom(

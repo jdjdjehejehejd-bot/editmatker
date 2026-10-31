@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildArchiveQuery, downloadSource, uploadedSource, buildCommonsQueries, inspectArchiveFiles, REASON, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
+import { buildArchiveQuery, downloadSource, uploadedSource, buildCommonsQueries, inspectArchiveFiles, REASON, type SourceVideo, normalizeLicense, parseCommonsPage, pickArchiveFile, rankSources, resolveLicense, type TopicInfo } from "./sources";
 
 const canPlayWebm = (mime: string) => mime.includes("webm");
 
@@ -245,6 +245,28 @@ describe("검색 결과 재사용", () => {
       expect(first).toBeGreaterThan(0);
       await findSources(topic, [], "reusable", null);
       expect(calls).toBe(first);
+    } finally {
+      globalThis.fetch = original;
+    }
+  });
+});
+
+describe("받기 재시도", () => {
+  it("원래 주소·프록시가 막히면 다른 주소로", async () => {
+    const original = globalThis.fetch;
+    const asked: string[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL) => {
+      const url = String(input);
+      asked.push(url);
+      if (url.includes("alt")) return new Response(new Uint8Array([1, 2, 3]), { status: 200, headers: { "content-type": "video/mp4" } });
+      if (url.includes("proxy")) return new Response(JSON.stringify({ error: "영상 응답 오류 (400)" }), { status: 502 });
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    try {
+      const source: SourceVideo = { id: "r", provider: "Reddit", title: "t", author: "a", license: "", licenseUrl: null, reusable: false, pageUrl: "", mediaUrl: "https://v.redd.it/x/DASH_720.mp4", fallbackUrl: "https://proxy/api/media?url=x", alternates: ["https://proxy-alt/api/media?url=y"], poster: null, duration: 10, bytes: null, relevance: 1 };
+      const blob = await downloadSource(source, () => undefined);
+      expect(blob.size).toBe(3);
+      expect(asked).toEqual(["https://v.redd.it/x/DASH_720.mp4", "https://proxy/api/media?url=x", "https://proxy-alt/api/media?url=y"]);
     } finally {
       globalThis.fetch = original;
     }

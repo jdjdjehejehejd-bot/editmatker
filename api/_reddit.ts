@@ -12,6 +12,33 @@ export function isRedditMediaUrl(value: string): boolean {
   }
 }
 
+/**
+ * v.redd.it 영상 주소의 다른 후보들. 같은 영상이 화질별(DASH_720, DASH_480 …)로 있고, 최근 올린 영상은
+ * 이름이 CMAF_로 바뀌어 예전 이름으로는 안 받아지기도 해서, 하나가 막히면 다음 것을 시도합니다.
+ */
+export function redditVideoVariants(url: string): string[] {
+  const out: string[] = [];
+  const push = (value: string) => {
+    if (!out.includes(value)) out.push(value);
+  };
+  push(url);
+  const match = /^(https:\/\/v\.redd\.it\/[^/?#]+)\/(DASH|CMAF)_(\d+)(\.mp4)?/i.exec(url);
+  if (!match) return out;
+  const [, base, kind, height] = match;
+  push(url.replace(/\?.*$/, ""));
+  const heights = [Number(height), 720, 480, 360, 240].filter((h, i, list) => h <= Number(height) && list.indexOf(h) === i);
+  const kinds = kind.toUpperCase() === "CMAF" ? ["CMAF", "DASH"] : ["DASH", "CMAF"];
+  for (const k of kinds) for (const h of heights) push(`${base}/${k}_${h}.mp4`);
+  return out.slice(0, 8);
+}
+
+/** Reddit 영상 서버에 보낼 헤더 — 이름 없는 프로그램처럼 보이면 거절(400/403)하는 경우가 있어 브라우저처럼 보냅니다 */
+export const REDDIT_MEDIA_HEADERS = {
+  "User-Agent": "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Mobile Safari/537.36",
+  Accept: "video/mp4,video/*;q=0.9,*/*;q=0.8",
+  Referer: "https://www.reddit.com/",
+};
+
 export function redditSearchParams(q: string, limit: number) {
   return new URLSearchParams({ q, sort: "relevance", t: "all", type: "link", limit: String(limit), raw_json: "1", include_over_18: "off" });
 }
