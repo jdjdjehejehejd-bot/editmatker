@@ -22,6 +22,14 @@ import { applyOverrides, defaultBpm, parseStyle, type EditStyle, type Mood, type
 
 export type StepId = "topic" | "search" | "learn" | "download" | "analyze" | "plan" | "render";
 
+/** 찾을 대상이 하나도 없을 때 분위기에 어울리는 영상 검색어 */
+const MOOD_FOOTAGE: Record<Mood, { term: string; label: string }> = {
+  hype: { term: "extreme sports", label: "익스트림 스포츠" },
+  cinematic: { term: "landscape", label: "풍경" },
+  emotional: { term: "sunset", label: "노을" },
+  retro: { term: "city night", label: "도시 야경" },
+};
+
 /** 거의 멈춘 영상을 건너뛸 때의 이유 */
 const STILL_VIDEO = "거의 멈춰 있는 영상(사진 모음·슬라이드쇼)이라 건너뛰었어요";
 
@@ -80,6 +88,8 @@ export interface TopicResult {
   irrelevant: number;
   /** 이름은 없지만 관련 주제(소속 팀·종목·그룹 등)가 제목에 나오는 영상 — 이름이 나오는 영상만으로 칸이 모자랄 때 채움 */
   related?: SourceVideo[];
+  /** 이름도 관련 주제도 안 나오지만 검색에 걸린 영상 — 다른 방법으로도 없을 때만 씀 */
+  loose?: SourceVideo[];
 }
 
 /** 주제별 결과 — 여러 주제 중 일부가 빠졌을 때 이유를 보여 주려고 */
@@ -111,6 +121,8 @@ export interface PipelineResult {
   relatedUsed?: number;
   /** 고른 영상 수(칸)와 실제로 쓴 수 */
   wanted?: number;
+  /** 처음 검색어로 영상이 없어 검색을 넓혔으면 그 설명 */
+  broadened?: string;
   topicSummary: TopicSummary[];
 }
 
@@ -177,10 +189,25 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       };
     }
   }
-  if (!specs.length && !uploads.length) throw new Error("특징·분위기에서 주제를 찾지 못했어요. 주제 칸에 인물·대상을 적거나 편집할 영상을 올려 주세요.");
+  /** 검색을 넓힌 방법 (결과에 알려 줌) */
+  let broadened: string | null = null;
+  const addNote = (note: string) => (broadened = broadened ? `${broadened} · ${note}` : note);
+  let moodFallback: { term: string; label: string } | null = null;
+  if (!specs.length && !uploads.length) {
+    // 스타일만 적어 찾을 대상이 없어도 멈추지 않고, 분위기에 어울리는 영상(풍경·도시 야경 등)으로 만듭니다.
+    const fallback = MOOD_FOOTAGE[style.mood];
+    moodFallback = fallback;
+    specs = [{ term: fallback.term, weight: 1 }];
+    broadened = `찾을 대상이 없어 분위기에 어울리는 ${fallback.label} 영상으로 만들었어요 — 인물·대상을 적으면 그걸로 찾아요`;
+  }
 
   if (specs.length) events.step("topic", specs.length > 1 ? `주제 ${specs.length}개를 해석하는 중` : `"${specs[0].term}" 주제를 해석하는 중`);
   const infos = await Promise.all(specs.map(spec => resolveTopic(spec.term, signal, policy)));
+  // 분위기로 고른 영상은 우리말 이름을 제목에 씁니다(영어 검색어는 다른 이름으로 남김).
+  if (moodFallback && infos[0]) {
+    infos[0].aliases = [...new Set([infos[0].label, ...(infos[0].aliases ?? [])])];
+    infos[0].label = moodFallback.label;
+  }
   // 장면으로 고른 주제는 우리말 이름("강아지")을 제목에 쓰고, Wikidata 이름("개")은 다른 이름으로 남겨 검색·관련성에 씁니다.
   if (inferred?.source === "vision") {
     [inferred, ...(inferred.also ?? [])].forEach((picked, i) => {
@@ -199,74 +226,113 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     input.licenseMode === "any" ? expandQueries(info, style.searchHints).map(q => q.q) : [info.englishLabel ?? info.label, ...(info.related ?? []).slice(0, 3)];
   // "올린 영상만 편집"이면 영상을 찾지 않습니다(올린 영상이 있을 때만).
   const searching = !(input.uploadsOnly && uploads.length);
-  const groups = infos.map((info, i) => ({ label: info.label, weight: specs[i].weight, queries: searching ? queriesFor(info) : [] }));
-  events.queries(searching ? groups : []);
-  const queryCount = groups.reduce((sum, g) => sum + g.queries.length, 0);
-  if (specs.length && searching) events.step("search", `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
-  const found = searching
-    ? await Promise.all(infos.map(info => findSources(info, style.searchHints, input.licenseMode, input.helper, signal, input.stockKeys)))
-    : infos.map(() => ({ sources: [] as SourceVideo[], reports: [] as SearchReport[] }));
 
   // 주제마다 쓸 수 있는 후보를 고릅니다(검열·관련성). 여러 주제에 같은 영상이 걸리면 아래에서 한 주제에만 줍니다.
   const censoredIds = new Set<string>();
   const censored: string[] = [];
   let irrelevant = 0;
-  const eligible = infos.map((info, i) => {
-    // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
-    // NSFW 모드에서는 성적 단어와 성인물 표시를 걸러내지 않습니다.
-    const matches = createTopicMatcher(info);
-    // 관련 주제(소속 팀·종목·그룹·대표작 등)가 제목에 나오는지 — 이름이 나오는 영상이 모자랄 때만 씁니다.
-    const relatedMatches = info.related?.length ? createTopicMatcher({ ...info, query: "", label: "", englishLabel: null, aliases: info.related }) : null;
-    const related: SourceVideo[] = [];
-    const flagged = found[i].sources.filter(source => (!policy.nsfw && source.nsfw) || !isTextAllowedWith(policy, source.title, source.author, source.tags));
-    // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
-    if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
-      const percent = Math.round((flagged.length / found[i].sources.length) * 100);
-      throw new GenerationBlockedError(`생성 불가 — "${info.query}"로 찾은 영상의 ${percent}%(${flagged.length}/${found[i].sources.length}개)가 검열 대상이에요.`);
-    }
-    const flaggedIds = new Set(flagged.map(source => source.id));
-    let topicIrrelevant = 0;
-    const list = found[i].sources.filter(source => {
-      if (flaggedIds.has(source.id)) {
-        if (!censoredIds.has(source.id)) {
-          censoredIds.add(source.id);
-          censored.push(source.id);
-          if (!source.nsfw) events.skipped(source, "부적절한 단어가 있어 제외했어요");
+  const shownGroups: QueryGroup[] = [];
+  /** 주제들을 검색하고 검열·관련성으로 거릅니다. 결과가 없으면 아래에서 검색을 넓혀 다시 부릅니다. */
+  const searchTopics = async (list: { info: TopicInfo; weight: number }[], detail?: string): Promise<TopicResult[]> => {
+    const groups = list.map(({ info, weight }) => ({ label: info.label, weight, queries: searching ? queriesFor(info) : [] }));
+    shownGroups.push(...(searching ? groups : []));
+    events.queries([...shownGroups]);
+    const queryCount = groups.reduce((sum, g) => sum + g.queries.length, 0);
+    if (list.length && searching) events.step("search", detail ?? `${where}에서 ${queryCount}가지 검색어로 찾는 중`);
+    const found = searching
+      ? await Promise.all(list.map(({ info }) => findSources(info, style.searchHints, input.licenseMode, input.helper, signal, input.stockKeys)))
+      : list.map(() => ({ sources: [] as SourceVideo[], reports: [] as SearchReport[] }));
+    const eligible = list.map(({ info }, i) => {
+      // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
+      // NSFW 모드에서는 성적 단어와 성인물 표시를 걸러내지 않습니다.
+      const matches = createTopicMatcher(info);
+      // 관련 주제(소속 팀·종목·그룹·대표작 등)가 제목에 나오는지 — 이름이 나오는 영상이 모자랄 때만 씁니다.
+      const relatedMatches = info.related?.length ? createTopicMatcher({ ...info, query: "", label: "", englishLabel: null, aliases: info.related }) : null;
+      const related: SourceVideo[] = [];
+      // 이름도 관련 주제도 안 나오지만 검색에는 걸린 영상 — 다른 방법으로도 영상이 없을 때만 씁니다.
+      const loose: SourceVideo[] = [];
+      const flagged = found[i].sources.filter(source => (!policy.nsfw && source.nsfw) || !isTextAllowedWith(policy, source.title, source.author, source.tags));
+      // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
+      if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
+        const percent = Math.round((flagged.length / found[i].sources.length) * 100);
+        throw new GenerationBlockedError(`생성 불가 — "${info.query}"로 찾은 영상의 ${percent}%(${flagged.length}/${found[i].sources.length}개)가 검열 대상이에요.`);
+      }
+      const flaggedIds = new Set(flagged.map(source => source.id));
+      let topicIrrelevant = 0;
+      const named = found[i].sources.filter(source => {
+        if (flaggedIds.has(source.id)) {
+          if (!censoredIds.has(source.id)) {
+            censoredIds.add(source.id);
+            censored.push(source.id);
+            if (!source.nsfw) events.skipped(source, "부적절한 단어가 있어 제외했어요");
+          }
+          return false;
         }
-        return false;
-      }
-      // 관련성: 제목·태그·채널에 주제 이름이 나오는 영상(또는 주제의 Commons 분류·대표 영상)만 씁니다.
-      const text = [source.title, source.tags, source.author].filter(Boolean).join(" ");
-      if (!source.trusted && !matches(text)) {
-        topicIrrelevant++;
-        if (relatedMatches?.(text)) related.push(source);
-        return false;
-      }
-      return true;
+        // 관련성: 제목·태그·채널에 주제 이름이 나오는 영상(또는 주제의 Commons 분류·대표 영상)만 씁니다.
+        const text = [source.title, source.tags, source.author].filter(Boolean).join(" ");
+        if (!source.trusted && !matches(text)) {
+          topicIrrelevant++;
+          if (relatedMatches?.(text)) related.push(source);
+          else loose.push(source);
+          return false;
+        }
+        return true;
+      });
+      irrelevant += topicIrrelevant;
+      // 특징 문장의 키워드(골, 덩크, 무대 등)가 제목·태그에 나오는 영상을 먼저 씁니다(원래 순서는 유지).
+      const keywordHits = (source: SourceVideo) => countKeywordHits([source.title, source.tags].filter(Boolean).join(" "), style.keywords ?? []);
+      const byKeyword = (items: SourceVideo[]) => (style.keywords?.length ? items.map((s, k) => ({ s, k, h: keywordHits(s) })).sort((a, b) => b.h - a.h || a.k - b.k).map(e => e.s) : items);
+      return { list: byKeyword(named), related: byKeyword(related), loose: byKeyword(loose), irrelevant: topicIrrelevant };
     });
-    irrelevant += topicIrrelevant;
-    // 특징 문장의 키워드(골, 덩크, 무대 등)가 제목·태그에 나오는 영상을 먼저 씁니다(원래 순서는 유지).
-    const keywordHits = (source: SourceVideo) => countKeywordHits([source.title, source.tags].filter(Boolean).join(" "), style.keywords ?? []);
-    const byKeyword = (items: SourceVideo[]) => (style.keywords?.length ? items.map((s, k) => ({ s, k, h: keywordHits(s) })).sort((a, b) => b.h - a.h || a.k - b.k).map(e => e.s) : items);
-    return { list: byKeyword(list), related: byKeyword(related), irrelevant: topicIrrelevant };
-  });
-  // 겹치는 영상(예: 두 사람이 함께 나오는 영상)은 후보가 더 적은 주제에 줍니다 — 먼저 적은 주제가 통째로 빠지지 않게.
-  const owner = new Map<string, number>();
-  eligible.forEach(({ list }, i) => {
-    for (const source of list) {
-      const current = owner.get(source.id);
-      if (current === undefined || list.length < eligible[current].list.length) owner.set(source.id, i);
+    // 겹치는 영상(예: 두 사람이 함께 나오는 영상)은 후보가 더 적은 주제에 줍니다 — 먼저 적은 주제가 통째로 빠지지 않게.
+    const owner = new Map<string, number>();
+    eligible.forEach(({ list: items }, i) => {
+      for (const source of items) {
+        const current = owner.get(source.id);
+        if (current === undefined || items.length < eligible[current].list.length) owner.set(source.id, i);
+      }
+    });
+    return list.map(({ info, weight }, i) => ({
+      info,
+      weight,
+      queries: groups[i].queries,
+      candidates: eligible[i].list.filter(source => owner.get(source.id) === i),
+      reports: found[i].reports,
+      irrelevant: eligible[i].irrelevant,
+      related: eligible[i].related.filter(source => !owner.has(source.id)),
+      loose: eligible[i].loose.filter(source => !owner.has(source.id)),
+    }));
+  };
+
+  const topics: TopicResult[] = await searchTopics(infos.map((info, i) => ({ info, weight: specs[i].weight })));
+  // 검색 결과가 없다고 멈추지 않습니다 — 넓혀 가며 다시 찾습니다.
+  const hasUsable = () => topics.some(t => t.candidates.length || t.related?.length);
+  if (searching && !hasUsable()) {
+    // 1) 다른 검색어: 주제의 관련 주제(소속 팀·그룹·종목 등)와 특징·분위기 키워드를 각각 주제로 찾습니다.
+    const tried = new Set(topics.map(t => t.info.query.toLowerCase()));
+    const featureText = input.features.toLowerCase();
+    const alternatives = [
+      ...topics.flatMap(t => (t.info.related ?? []).slice(0, 2)),
+      ...(style.keywords ?? []).filter(word => word.length >= 2 && featureText.includes(word.toLowerCase())),
+    ]
+      .filter(term => term && !tried.has(term.toLowerCase()) && !checkUserInput(term, ""))
+      .filter((term, i, list) => list.findIndex(other => other.toLowerCase() === term.toLowerCase()) === i)
+      .slice(0, 4);
+    if (alternatives.length) {
+      const altInfos = (await Promise.all(alternatives.map(term => resolveTopic(term, signal, policy)))).filter(info => isTopicAllowed(info, policy));
+      const more = await searchTopics(
+        altInfos.map(info => ({ info, weight: 1 })),
+        `결과가 없어 다른 검색어(${altInfos.map(info => info.label).join(", ")})로 넓혀 찾는 중`
+      );
+      if (more.some(t => t.candidates.length || t.related?.length)) addNote(`"${topics.map(t => t.info.label).join(", ")}" 영상이 없어 ${more.filter(t => t.candidates.length || t.related?.length).map(t => `"${t.info.label}"`).join(", ")}(으)로 넓혀 찾았어요`);
+      topics.push(...more);
     }
-  });
-  const topics: TopicResult[] = infos.map((info, i) => ({
-    info,
-    weight: specs[i].weight,
-    queries: groups[i].queries,
-    candidates: eligible[i].list.filter(source => owner.get(source.id) === i),
-    reports: found[i].reports,
-    irrelevant: eligible[i].irrelevant,
-    related: eligible[i].related.filter(source => !owner.has(source.id)),
-  }));
+  }
+  if (searching && !hasUsable()) {
+    // 2) 그래도 없으면 조건을 풉니다: 검색에 걸렸지만 제목에 이름이 없어 뺐던 영상을 씁니다(부적절한 영상은 계속 제외).
+    for (const t of topics) if (t.loose?.length) t.candidates = t.loose.map(source => ({ ...source, relatedOnly: true }));
+    if (hasUsable()) addNote("제목에 이름이 나오는 영상이 없어, 검색에 걸린 영상 중 가까운 것으로 만들었어요");
+  }
   // 직접 올린 영상은 하나의 "주제"처럼 다룹니다. 주제와 함께 쓰면 편집의 절반을 차지합니다.
   const uploadTopic: TopicResult | null = uploads.length
     ? {
@@ -711,7 +777,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     }
     return { label: t.info.label, weight: t.weight, used, note };
   });
-  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile), relatedUsed: loaded.filter(s => s.relatedOnly).length, wanted: slots };
+  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile), relatedUsed: loaded.filter(s => s.relatedOnly).length, wanted: slots, broadened: broadened ?? undefined };
 }
 
 /** 구체적인 대상(사람·그룹·팀·장소·작품·브랜드)인지 — 이런 대상은 주제로, 아닌 말(무대·바다·골)은 공통 특징으로 씁니다 */
@@ -744,7 +810,8 @@ async function topicFromFeatures(features: string, keywords: string[], signal: A
   const found = candidates
     .map((word, i) => ({ word, info: infos[i] }))
     .filter((entry): entry is { word: string; info: TopicInfo } => Boolean(entry.info && isTopicAllowed(entry.info, policy) && (entry.info.englishLabel || entry.info.description)));
-  if (!found.length) return null;
+  // Wikidata에 없는 말이어도 멈추지 않고 그 낱말 그대로 검색합니다(첫 말이 주제, 나머지는 공통 특징).
+  if (!found.length) return { term: candidates[0], label: candidates[0], source: "features", confidence: 0.5, traits: candidates.slice(1) };
   const isSpecific = (info: TopicInfo) => Boolean(info.person || info.sports || SPECIFIC_ENTITY.test(info.description ?? ""));
   const specific = found.filter(entry => isSpecific(entry.info)).slice(0, 3);
   const topics = specific.length ? specific : found.slice(0, 1);

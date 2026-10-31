@@ -910,6 +910,11 @@ export default function App() {
                   ))}
                 </div>
               )}
+              {result?.broadened && (
+                <p className="learned">
+                  <b>검색 넓히기</b> {result.broadened}
+                </p>
+              )}
               {result?.inferredTopic && (
                 <p className="learned">
                   <b>고른 주제</b> {result.inferredTopic.source === "features" ? "특징·분위기를" : `올린 영상의 ${result.inferredTopic.source === "filename" ? "파일 이름을" : "장면을"}`} 보고{" "}
