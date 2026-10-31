@@ -101,3 +101,24 @@ describe("비중과 장면 다시 쓰기", () => {
     expect(seconds("heavy")).toBeGreaterThan(seconds("light") * 2);
   });
 });
+
+describe("흐름", () => {
+  const highlights = ["a", "b", "c"].flatMap(sourceId => [0, 1, 2].map(i => ({ sourceId, start: 10 + i * 10, length: 4, score: 0.9 - i * 0.1 })));
+  it("점점 고조되게: 드롭이 늦고, 처음부터: 일찍, 기본은 1/4", () => {
+    const at = (features: string) => {
+      const plan = buildPlan({ highlights, style: parseStyle(features), totalSeconds: 30 });
+      return plan.dropAt / plan.duration;
+    };
+    expect(at("점점 고조되게")).toBeGreaterThan(at(""));
+    expect(at("처음부터 터지게")).toBeLessThan(at(""));
+    expect(at("")).toBeCloseTo(0.25, 1);
+  });
+
+  it("여운 있게: 아웃트로가 길어짐", () => {
+    const outro = (features: string) =>
+      buildPlan({ highlights, style: parseStyle(features), totalSeconds: 30 })
+        .segments.filter(s => s.section === "outro")
+        .reduce((a, s) => a + s.duration, 0);
+    expect(outro("여운 있게")).toBeGreaterThan(outro(""));
+  });
+});

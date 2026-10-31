@@ -28,7 +28,43 @@ export interface EditStyle {
   matched?: string[];
   /** 특징 문장이 말하는 "어떤 장면"을 고를지 (밝기, 동작 세기, 함성, 사람 얼굴, 화려함, 찍힌 대상) */
   scene?: ScenePreference;
+  /** 화면 느낌 보정 (밝기·대비·채도·빛 번짐·가장자리 어둡게). 없으면 색감(grade) 그대로 */
+  look?: Look;
+  /** 흐름: 드롭(본격적으로 터지는 지점)의 위치(0~1)와 아웃트로 길이(박자) */
+  structure?: { dropRatio?: number; outroBeats?: number };
 }
+
+export interface Look {
+  /** 1 = 그대로. 0.85 어둡게, 1.08 밝게 */
+  exposure: number;
+  contrast: number;
+  saturation: number;
+  /** 0~1 빛 번짐(몽환적) */
+  glow: number;
+  /** 가장자리 어둡게 세기 (1 = 기본) */
+  vignette: number;
+}
+
+export const NEUTRAL_LOOK: Look = { exposure: 1, contrast: 1, saturation: 1, glow: 0, vignette: 1 };
+
+/** 특징 문장의 "느낌" 낱말 → 화면 보정 */
+const LOOK_RULES: { re: RegExp; apply: (look: Look) => void }[] = [
+  { re: /밝고|밝은 ?(?:느낌|분위기|화면)|화사|청량|산뜻|상큼|햇살 ?같|bright ?(?:mood|look)|fresh/i, apply: l => ((l.exposure = 1.08), (l.vignette = Math.min(l.vignette, 0.6))) },
+  { re: /어둡고|어두운 ?(?:느낌|분위기|화면)|음울|암울|무거운|다크한|느와르|우울|gloomy|moody|noir|dark ?(?:mood|look)/i, apply: l => ((l.exposure = 0.86), (l.vignette = Math.max(l.vignette, 1.5))) },
+  { re: /강렬|쨍|선명하게|하드한|대비 ?강|punchy|contrasty/i, apply: l => (l.contrast = 1.15) },
+  { re: /부드럽|뽀얀|뿌연|파스텔|은은|soft ?(?:look|light)|pastel/i, apply: l => ((l.contrast = 0.9), (l.glow = Math.max(l.glow, 0.4))) },
+  { re: /화려|비비드|알록달록|채도 ?높|vibrant|vivid/i, apply: l => (l.saturation = 1.2) },
+  { re: /물 ?빠진|바랜|빛바랜|차분한 ?색|채도 ?낮|무채색|muted|faded|washed/i, apply: l => (l.saturation = 0.75) },
+  { re: /몽환|꿈 ?같|꿈결|환상|블룸|빛 ?번짐|글로우|dreamy|ethereal|glow|bloom/i, apply: l => (l.glow = 1) },
+  { re: /긴장|미스터리|공포|스릴|섬뜩|tense|mystery|horror|thriller/i, apply: l => (l.vignette = Math.max(l.vignette, 1.6)) },
+];
+
+/** 흐름 낱말: 드롭 위치와 아웃트로 */
+const STRUCTURE_RULES: { re: RegExp; apply: (s: { dropRatio?: number; outroBeats?: number }) => void }[] = [
+  { re: /점점|서서히|빌드 ?업|고조|차근차근|build ?-?up|gradual/i, apply: s => (s.dropRatio = 0.4) },
+  { re: /처음부터|시작부터|초반부터|바로 ?터지|오프닝부터|from the start|right away/i, apply: s => (s.dropRatio = 0.08) },
+  { re: /여운|마무리 ?(?:는 ?)?잔잔|끝(?:은|에는)? ?잔잔|긴 ?아웃트로|천천히 ?끝|long ?outro|fade ?out ending/i, apply: s => (s.outroBeats = 8) },
+];
 
 export interface ScenePreference {
   brightness?: "bright" | "dark";
@@ -303,6 +339,12 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
       matched.add(hit);
     }
   }
+  // 화면 느낌(밝기·대비·채도·빛 번짐·가장자리)과 흐름(드롭 위치·아웃트로)
+  const look: Look = { ...NEUTRAL_LOOK };
+  for (const rule of LOOK_RULES) if (note(rule.re)) rule.apply(look);
+  const structure: { dropRatio?: number; outroBeats?: number } = {};
+  for (const rule of STRUCTURE_RULES) if (note(rule.re)) rule.apply(structure);
+
   const scene: ScenePreference = {};
   for (const rule of SCENE_RULES) if (note(rule.re)) rule.apply(scene);
   const subjects = SUBJECT_WORDS.filter(([re]) => note(re)).map(([, term]) => term);
@@ -354,6 +396,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     transition,
     matched: [...matched],
     scene: Object.keys(scene).length ? scene : undefined,
+    look: Object.entries(look).some(([key, value]) => value !== NEUTRAL_LOOK[key as keyof Look]) ? look : undefined,
+    structure: Object.keys(structure).length ? structure : undefined,
   };
 }
 
