@@ -50,6 +50,78 @@ const PATTERNS: Record<Mood, Pattern> = {
   retro: { kick: [0, 4, 8, 12], snare: [4, 12], hats: [2, 6, 10, 14], bass: [0, 2, 4, 6, 8, 10, 12, 14], arp: [0, 3, 6, 8, 11, 14] },
 };
 
+/** 씨앗(seed)으로 정해지는 난수 — 같은 씨앗이면 같은 곡(테스트·다시 듣기), 다르면 다른 곡 */
+export function seededRandom(seed: number): () => number {
+  let a = Math.floor(seed * 2 ** 32) >>> 0 || 1;
+  return () => {
+    a = (a + 0x6d2b79f5) >>> 0;
+    let t = a;
+    t = Math.imul(t ^ (t >>> 15), t | 1);
+    t ^= t + Math.imul(t ^ (t >>> 7), t | 61);
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+/** 분위기는 그대로 두고 곡마다 바뀌는 것: 조(키), 화음 순서, 드럼 무늬, 아르페지오 위치, 멜로디 */
+export interface Variation {
+  /** 반음 단위로 조 옮기기 */
+  transpose: number;
+  /** 화음 진행을 몇 마디 밀어서 시작할지 */
+  rotate: number;
+  /** 두 화음 자리를 바꿀지 */
+  swap: boolean;
+  kick: number[];
+  hats: number[];
+  arp: number[];
+  /** 드롭에서 마디마다 되풀이할 멜로디(8분음표 8개, 화음 안 음의 순번, -1은 쉼) */
+  motif: number[];
+}
+
+const KICK_VARIANTS: Record<Mood, number[][]> = {
+  hype: [[0, 7, 10], [0, 6, 10], [0, 3, 10], [0, 7, 9, 14]],
+  cinematic: [[0, 8], [0, 10], [0, 6, 8]],
+  emotional: [[0, 10], [0, 8], [0, 6]],
+  retro: [[0, 4, 8, 12], [0, 4, 8, 12], [0, 6, 8, 12]],
+};
+const HAT_VARIANTS: number[][] = [
+  [0, 2, 4, 6, 8, 10, 12, 14],
+  [2, 6, 10, 14],
+  [0, 2, 3, 6, 8, 10, 11, 14],
+  [1, 3, 5, 7, 9, 11, 13, 15],
+];
+const ARP_VARIANTS: number[][] = [
+  [0, 2, 4, 6, 8, 10, 12, 14],
+  [0, 3, 6, 8, 11, 14],
+  [0, 4, 6, 10, 12],
+  [0, 2, 6, 8, 10, 14],
+];
+
+/** 씨앗으로 이번 곡의 변화를 고릅니다. seed가 없으면 예전과 같은 곡(변화 없음). */
+export function pickVariation(mood: Mood, seed?: number): Variation {
+  const base = PATTERNS[mood];
+  if (seed === undefined) return { transpose: 0, rotate: 0, swap: false, kick: base.kick, hats: base.hats, arp: base.arp, motif: [] };
+  const random = seededRandom(seed);
+  const pick = <T,>(list: T[]) => list[Math.floor(random() * list.length) % list.length];
+  return {
+    transpose: pick([-3, -2, 0, 2, 3, 5]),
+    rotate: Math.floor(random() * 4),
+    swap: random() < 0.4,
+    kick: pick(KICK_VARIANTS[mood]),
+    // 하이햇이 없는 분위기(시네마틱)는 없는 채로, 있는 분위기만 무늬를 바꿉니다.
+    hats: base.hats.length ? pick(HAT_VARIANTS) : [],
+    arp: base.arp.length ? pick(ARP_VARIANTS) : [],
+    motif: Array.from({ length: 8 }, () => (random() < 0.3 ? -1 : Math.floor(random() * 3))),
+  };
+}
+
+/** 변화를 적용한 화음 진행 */
+export function variedProgression(mood: Mood, variation: Variation): { bass: number; chord: number[] }[] {
+  const list = PROGRESSIONS[mood].map(c => ({ bass: c.bass + variation.transpose, chord: c.chord.map(n => n + variation.transpose) }));
+  const rotated = list.map((_, i) => list[(i + variation.rotate) % list.length]);
+  if (variation.swap) [rotated[1], rotated[2]] = [rotated[2], rotated[1]];
+  return rotated;
+}
+
 export interface MusicOptions {
   mood: Mood;
   bpm: number;
@@ -60,6 +132,8 @@ export interface MusicOptions {
   /** 아웃트로 시작(초) */
   outroAt: number;
   sampleRate?: number;
+  /** 곡마다 다르게(조·화음 순서·드럼·멜로디). 없으면 분위기마다 늘 같은 곡 */
+  seed?: number;
 }
 
 export async function synthesizeMusic(options: MusicOptions): Promise<AudioBuffer> {
@@ -187,8 +261,9 @@ export async function synthesizeMusic(options: MusicOptions): Promise<AudioBuffe
     src.stop(end);
   };
 
-  const pattern = PATTERNS[mood];
-  const progression = PROGRESSIONS[mood];
+  const variation = pickVariation(mood, options.seed);
+  const pattern = { ...PATTERNS[mood], kick: variation.kick, hats: variation.hats, arp: variation.arp };
+  const progression = variedProgression(mood, variation);
   const musicEnd = options.duration - 0.5;
   const bars = Math.ceil(musicEnd / barLength);
 
@@ -220,6 +295,11 @@ export async function synthesizeMusic(options: MusicOptions): Promise<AudioBuffe
           tone(t, midiToHz(note), step * 1.8, mood === "emotional" ? 0.09 : 0.06, mood === "emotional" ? "triangle" : "square", 3000, 6);
         }
         if (mood === "cinematic" && [3, 6, 11, 14].includes(s)) kick(t, 0.35);
+        // 곡마다 다른 짧은 멜로디(마디마다 되풀이, 8분음표 8개 — 화음이 바뀌면 음도 따라 바뀜)
+        if (variation.motif.length && s % 2 === 0) {
+          const index = variation.motif[s / 2];
+          if (index >= 0) tone(t, midiToHz(chord.chord[index] + 12), step * 1.6, mood === "emotional" ? 0.06 : 0.045, mood === "retro" ? "square" : "triangle", 2800, 6);
+        }
       } else if (section === "intro") {
         // 인트로: 화음과 가벼운 리듬만
         if (mood === "emotional" && pattern.arp.includes(s)) tone(t, midiToHz(chord.chord[(s / 2) % 3 | 0] + 12), step * 2, 0.07, "triangle", 2500);

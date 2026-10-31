@@ -34,3 +34,26 @@ describe("무료 음악 (Openverse)", () => {
     expect(isAudioMediaUrl("http://cdn.freesound.org/a.mp3")).toBe(false);
   });
 });
+
+describe("무료 음악이 매번 같지 않게", () => {
+  const track = (id: string) => ({ id, title: id, creator: "x", url: `https://cdn.freesound.org/${id}.mp3`, pageUrl: "", license: "CC0", licenseUrl: null, duration: 60, provider: "freesound" });
+
+  it("최근에 쓴 곡은 뒤로, 오래전에 쓴 곡이 그다음", async () => {
+    const { orderTracks } = await import("./freemusic");
+    const order = orderTracks([track("a"), track("b"), track("c"), track("d")], ["b", "d"], () => 0.5).map(t => t.id);
+    expect(order.slice(0, 2).sort()).toEqual(["a", "c"]);
+    expect(order.slice(2)).toEqual(["d", "b"]); // d가 b보다 오래전에 씀
+  });
+
+  it("쓴 곡을 기억함 (최근 30곡)", async () => {
+    const { loadRecentTracks, rememberTrack } = await import("./freemusic");
+    const data = new Map<string, string>();
+    const storage = { getItem: (k: string) => data.get(k) ?? null, setItem: (k: string, v: string) => void data.set(k, v) };
+    for (let i = 0; i < 35; i++) rememberTrack(`t${i}`, storage);
+    rememberTrack("t34", storage);
+    const recent = loadRecentTracks(storage);
+    expect(recent).toHaveLength(30);
+    expect(recent[0]).toBe("t34");
+    expect(recent.filter(id => id === "t34")).toHaveLength(1);
+  });
+});
