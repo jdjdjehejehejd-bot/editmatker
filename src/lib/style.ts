@@ -32,7 +32,26 @@ export interface EditStyle {
   look?: Look;
   /** 흐름: 드롭(본격적으로 터지는 지점)의 위치(0~1)와 아웃트로 길이(박자) */
   structure?: { dropRatio?: number; outroBeats?: number };
+  /** 특징 문장의 내용 키워드(골, 덩크, 무대 등 — 스타일을 말하는 낱말은 뺌). 제목·태그에 나오는 영상을 먼저 씀 */
+  keywords?: string[];
 }
+
+/** 제목 등에 키워드가 몇 개 나오는지 (띄어쓰기·대소문자 무시) */
+export function countKeywordHits(text: string, keywords: string[]): number {
+  if (!keywords.length) return 0;
+  const lower = text.toLowerCase();
+  const haystack = lower.replace(/\s+/g, "");
+  return keywords.filter(word => {
+    // 한 글자 우리말(골, 산)은 다른 낱말 속(골프, 골목)이 아닐 때만, 앞에 다른 글자가 붙은 경우(결승골)는 인정
+    if (/^[가-힣]$/.test(word)) return new RegExp(`${word}(?=$|[^가-힣]|[이을를에과와의도])`).test(lower);
+    return haystack.includes(word.toLowerCase().replace(/\s+/g, ""));
+  }).length;
+}
+
+/** 키워드로 쓰지 않을 일반적인 말 */
+const KEYWORD_STOP = /^(?:장면|위주|위주로|영상|영상들|느낌|분위기|스타일|편집|에딧|하게|있게|같이|처럼|그리고|많이|조금|정도|모음|부분|순간|때|것|거|중심|중심으로|edit|video|scene|scenes|style|mood)$/i;
+/** 낱말 끝의 조사 */
+const PARTICLE = /(?:으로|에서|이랑|하고|까지|부터|처럼|같이|위주로|위주|으로|로|은|는|이|가|을|를|에|의|와|과|도|만|랑)$/;
 
 export interface Look {
   /** 1 = 그대로. 0.85 어둡게, 1.08 밝게 */
@@ -77,6 +96,8 @@ export interface ScenePreference {
   colorful?: boolean;
   /** 찍힌 대상(이미지 분류 묶음의 term, 예: "ocean", "car racing") */
   subjects?: string[];
+  /** 골·펀치·덩크 같은 결정적 순간이 있는 구간을 우선 */
+  impact?: boolean;
 }
 
 /** 특징 문장의 장면 낱말 → 장면 선호 */
@@ -88,6 +109,12 @@ const SCENE_RULES: { re: RegExp; apply: (p: ScenePreference) => void }[] = [
   { re: /함성|환호|관중|열광|떼창|응원|박수|crowd|cheer|roar/i, apply: p => (p.loud = true) },
   { re: /얼굴|표정|클로즈 ?업|인물 ?위주|사람 ?위주|눈빛|face|close ?-?up|portrait/i, apply: p => (p.people = true) },
   { re: /화려|알록달록|컬러풀|색감 ?좋|쨍한|colorful|vibrant/i, apply: p => (p.colorful = true) },
+  // 결정적 동작: 펀치·슛처럼 확 튀는 순간이 있는 구간을 우선
+  { re: /(?:^|[^가-힣])골(?=$|[^가-힣]|[이을를에과와의도])|결승골|선제골|동점골|역전골|슛|슈팅|득점|덩크|케이오|녹아웃|펀치|발차기|태클|세이브|선방|홈런|스매시|스파이크|역전|결승|드리블|돌파|\bko\b|goals?\b|shots?\b|dunks?|knock ?outs?|punch|kicks?\b|tackles?|saves?\b|home ?runs?|smash|spike/i, apply: p => ((p.impact = true), (p.loud = true)) },
+  // 반응: 세리머니·환호처럼 함성 속에 사람이 보이는 순간
+  { re: /세리머니|세레머니|환호|축하|우승|트로피|시상|celebrat|trophy|champion/i, apply: p => ((p.loud = true), (p.people = true)) },
+  // 감정: 눈물·미소처럼 얼굴이 보이는 순간
+  { re: /눈물|감동|울컥|미소|웃음|웃는|우는|tears?\b|smil|cry/i, apply: p => (p.people = true) },
 ];
 
 /** 한 글자 우리말 낱말(산, 개, 새, 배)이 다른 낱말 속(산책, 생산, 개인)에 든 경우를 빼고 찾는 정규식 조각 */
@@ -396,9 +423,31 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     transition,
     matched: [...matched],
     scene: Object.keys(scene).length ? scene : undefined,
+    keywords: contentKeywords(text, searchHints),
     look: Object.entries(look).some(([key, value]) => value !== NEUTRAL_LOOK[key as keyof Look]) ? look : undefined,
     structure: Object.keys(structure).length ? structure : undefined,
   };
+}
+
+/**
+ * 특징 문장의 내용 키워드: 우리말 낱말(조사 뗌)과 영어 검색 힌트 중, 편집 스타일을 말하는 낱말과 일반적인 말을 뺀 것.
+ * 예: "손흥민 골 장면 위주로, 웅장하게" → ["손흥민", "골"]
+ */
+export function contentKeywords(text: string, hints: string[] = []): string[] {
+  const styleWords = [
+    ...Object.values(MOOD_KEYWORDS),
+    ...GRADE_KEYWORDS.map(([, re]) => re),
+    ...EFFECT_KEYWORDS.map(([, re]) => re),
+    ...PACE_KEYWORDS.map(([, re]) => re),
+    ...TRANSITION_KEYWORDS.map(([, re]) => re),
+    ...LOOK_RULES.map(rule => rule.re),
+    ...STRUCTURE_RULES.map(rule => rule.re),
+  ];
+  const korean = (text.match(/[가-힣]+/g) ?? [])
+    .map(word => (word.length > 2 ? word.replace(PARTICLE, "") : word))
+    .filter(word => word && !KEYWORD_STOP.test(word) && !styleWords.some(re => re.test(word)) && !/(?:하게|스럽게|적인|롭게|있게|없이|빼고)$/.test(word));
+  const words = [...new Set([...korean, ...hints])].filter(word => word.length >= 1);
+  return words.slice(0, 6);
 }
 
 export function clamp(value: number, min: number, max: number) {

@@ -11,6 +11,7 @@ import { embed, frameScores, inferTopic, posterFrame, uploadFrames, type Inferre
 import { addSimilarity, centroid, cosine, rerankBySimilarity } from "./similarity";
 import { sanitizeWeight, uploadGroupWeight } from "./uploads";
 import { downloadTrack, findFreeMusic, rememberTrack, trackCredit, type FreeTrack } from "./freemusic";
+import { countKeywordHits } from "./style";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
 import { describeError, downloadSource, findSources, REASON, summarizeReports, resolveTopic, uploadedSource, type LicenseMode, type SearchReport, type SourceVideo, type TopicInfo } from "./sources";
@@ -72,6 +73,8 @@ export interface TopicResult {
   reports: SearchReport[];
   /** 제목에 주제 이름이 없어 뺀 영상 수 */
   irrelevant: number;
+  /** 이름은 없지만 관련 주제(소속 팀·종목·그룹 등)가 제목에 나오는 영상 — 이름이 나오는 영상만으로 칸이 모자랄 때 채움 */
+  related?: SourceVideo[];
 }
 
 /** 주제별 결과 — 여러 주제 중 일부가 빠졌을 때 이유를 보여 주려고 */
@@ -99,6 +102,10 @@ export interface PipelineResult {
   inferredTopic?: InferredTopic;
   /** 주제와 올린 영상을 서로 닮은 쪽으로 맞췄는지 (찾은 영상은 올린 영상과 닮은 순, 올린 영상은 주제와 닮은 장면 우선) */
   matched?: boolean;
+  /** 고른 영상 수보다 이름이 나오는 영상이 적어 관련 영상으로 채운 수 */
+  relatedUsed?: number;
+  /** 고른 영상 수(칸)와 실제로 쓴 수 */
+  wanted?: number;
   topicSummary: TopicSummary[];
 }
 
@@ -181,6 +188,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     // 검열: 제목·채널·분류에 금지어가 있거나 출처가 성인물로 표시한 영상은 받지 않습니다.
     // NSFW 모드에서는 성적 단어와 성인물 표시를 걸러내지 않습니다.
     const matches = createTopicMatcher(info);
+    // 관련 주제(소속 팀·종목·그룹·대표작 등)가 제목에 나오는지 — 이름이 나오는 영상이 모자랄 때만 씁니다.
+    const relatedMatches = info.related?.length ? createTopicMatcher({ ...info, query: "", label: "", englishLabel: null, aliases: info.related }) : null;
+    const related: SourceVideo[] = [];
     const flagged = found[i].sources.filter(source => (!policy.nsfw && source.nsfw) || !isTextAllowedWith(policy, source.title, source.author, source.tags));
     // 찾은 영상 중 상당수가 검열 대상이면 주제 자체를 막습니다.
     if (shouldBlockTopic(flagged.length, found[i].sources.length)) {
@@ -199,14 +209,19 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         return false;
       }
       // 관련성: 제목·태그·채널에 주제 이름이 나오는 영상(또는 주제의 Commons 분류·대표 영상)만 씁니다.
-      if (!source.trusted && !matches([source.title, source.tags, source.author].filter(Boolean).join(" "))) {
+      const text = [source.title, source.tags, source.author].filter(Boolean).join(" ");
+      if (!source.trusted && !matches(text)) {
         topicIrrelevant++;
+        if (relatedMatches?.(text)) related.push(source);
         return false;
       }
       return true;
     });
     irrelevant += topicIrrelevant;
-    return { list, irrelevant: topicIrrelevant };
+    // 특징 문장의 키워드(골, 덩크, 무대 등)가 제목·태그에 나오는 영상을 먼저 씁니다(원래 순서는 유지).
+    const keywordHits = (source: SourceVideo) => countKeywordHits([source.title, source.tags].filter(Boolean).join(" "), style.keywords ?? []);
+    const byKeyword = (items: SourceVideo[]) => (style.keywords?.length ? items.map((s, k) => ({ s, k, h: keywordHits(s) })).sort((a, b) => b.h - a.h || a.k - b.k).map(e => e.s) : items);
+    return { list: byKeyword(list), related: byKeyword(related), irrelevant: topicIrrelevant };
   });
   // 겹치는 영상(예: 두 사람이 함께 나오는 영상)은 후보가 더 적은 주제에 줍니다 — 먼저 적은 주제가 통째로 빠지지 않게.
   const owner = new Map<string, number>();
@@ -223,6 +238,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     candidates: eligible[i].list.filter(source => owner.get(source.id) === i),
     reports: found[i].reports,
     irrelevant: eligible[i].irrelevant,
+    related: eligible[i].related.filter(source => !owner.has(source.id)),
   }));
   // 직접 올린 영상은 하나의 "주제"처럼 다룹니다. 주제와 함께 쓰면 편집의 절반을 차지합니다.
   const uploadTopic: TopicResult | null = uploads.length
@@ -253,7 +269,8 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       }
     : null;
   events.candidates([...(uploadTopic?.candidates ?? []), ...topics.flatMap(t => t.candidates)]);
-  const online = topics.filter(t => t.candidates.length);
+  // 이름이 나오는 영상이 없어도 관련 영상이 있으면 그 주제를 씁니다(관련 영상은 아래에서 칸이 모자랄 때만 받음).
+  const online = topics.filter(t => t.candidates.length || t.related?.length);
   const active = uploadTopic ? [uploadTopic, ...online] : online;
   if (!active.length) {
     const scope = input.licenseMode === "reusable" ? "재사용 가능한 라이선스의 " : "";
@@ -483,7 +500,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         // 가중치가 큰 올린 영상은 더 자주 나오므로 하이라이트도 그만큼 더 뽑아 같은 장면 반복을 줄입니다.
         const count = candidate.uploadWeight ? Math.ceil(perSource * candidate.uploadWeight) : perSource;
         // 스포츠 영상은 펀치·슛 같은 결정적 순간이 있는 구간을 우선합니다(걷기·세리머니·견제만 하는 장면은 뒤로).
-        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) });
+        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact) });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
         const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
         loaded.push(source);
@@ -539,11 +556,19 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       }
     }
     // 2) 영상이 모자란 주제가 있으면 남은 칸을 다른 주제의 다음 후보로 채웁니다.
-    for (let progress = true; loaded.length < slots && progress; ) {
-      progress = false;
-      for (const { t } of byWeight) {
+    // 3) 그래도 모자라면(제목에 이름이 나오는 영상이 적을 때) 관련 주제가 제목에 나오는 영상으로 채웁니다.
+    //    예전에는 여기서 멈춰서, 영상을 여러 개 고르게 해도 1개만 쓰는 일이 있었습니다.
+    for (const fallback of [false, true]) {
+      if (fallback) {
         if (loaded.length >= slots) break;
-        if (await tryNext(t, Math.ceil(approxCuts / slots) + 2, slots - loaded.length)) progress = true;
+        for (const { t } of byWeight) if (t.related?.length) t.candidates = [...t.candidates, ...t.related.map(source => ({ ...source, relatedOnly: true }))];
+      }
+      for (let progress = true; loaded.length < slots && progress; ) {
+        progress = false;
+        for (const { t } of byWeight) {
+          if (loaded.length >= slots) break;
+          if (await tryNext(t, Math.ceil(approxCuts / slots) + 2, slots - loaded.length)) progress = true;
+        }
       }
     }
   } finally {
@@ -610,7 +635,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     }
     return { label: t.info.label, weight: t.weight, used, note };
   });
-  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile) };
+  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile), relatedUsed: loaded.filter(s => s.relatedOnly).length, wanted: slots };
 }
 
 /** 참고 에딧(올린 파일 + 인터넷에서 찾은 에딧, 합쳐 최대 3개)을 분석해 스타일 프로필을 만듭니다. 실패해도 생성은 계속합니다. */

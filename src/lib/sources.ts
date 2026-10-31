@@ -35,6 +35,8 @@ export interface SourceVideo {
   file?: File;
   /** 올린 영상의 가중치 (×1~×5, 클수록 자주 나옴) */
   uploadWeight?: number;
+  /** 제목에 주제 이름은 없고 관련 주제만 나오는 영상 (칸이 모자라 채운 것) */
+  relatedOnly?: boolean;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
   fallbackUrl?: string;
   poster: string | null;

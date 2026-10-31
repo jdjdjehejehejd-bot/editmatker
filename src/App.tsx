@@ -851,6 +851,13 @@ export default function App() {
                   {result.inferredTopic.source === "vision" ? ` (확신 ${Math.round(result.inferredTopic.confidence * 100)}%)` : ""}
                 </p>
               )}
+              {result && (result.relatedUsed || (result.wanted && result.sources.length < result.wanted)) ? (
+                <p className="learned">
+                  <b>영상 수</b> {result.wanted}개 중 {result.sources.length}개를 썼어요
+                  {result.relatedUsed ? ` — 제목에 이름이 나오는 영상이 적어 관련 영상(팀·종목·그룹 등) ${result.relatedUsed}개로 채웠어요` : ""}
+                  {result.wanted && result.sources.length < result.wanted ? (skipped.length ? " — 나머지는 아래 '건너뛴 영상'에 이유가 있어요" : " — 더 쓸 수 있는 영상을 찾지 못했어요") : ""}
+                </p>
+              ) : null}
               {result?.matched && (
                 <p className="learned">
                   <b>닮은 장면 맞추기</b> 찾은 영상은 올린 영상과 닮은 순으로, 올린 영상은 주제와 닮은 장면 위주로 골랐어요
