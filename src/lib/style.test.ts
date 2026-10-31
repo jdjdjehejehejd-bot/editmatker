@@ -206,15 +206,26 @@ describe("NSFW 성적 낱말 확장", () => {
     expect(parseStyle("섹스 엣지").searchHints).toEqual([]);
   });
 
-  it("에로틱·섹슈얼만 적어도 NSFW로 읽어 성적 결을 적용한다", () => {
-    const style = parseStyle("에로틱");
+  it("NSFW 표시가 없으면 에로틱·섹슈얼도 아무 효과가 없다", () => {
+    for (const text of ["에로틱", "섹슈얼한 분위기", "erotic"]) {
+      const style = parseStyle(text);
+      expect(style.mood, text).toBe("hype");
+      expect(style.transition, text).toBeUndefined();
+      expect(style.effects.has("slowmo"), text).toBe(false);
+      expect(style.searchHints, text).toEqual([]);
+      expect(style.look, text).toBeUndefined();
+    }
+  });
+
+  it("NSFW와 함께 적으면 에로틱·섹슈얼도 성적 결을 적용한다", () => {
+    const style = parseStyle("nsfw, 에로틱");
     expect(style.mood).toBe("emotional");
     expect(style.grade).toBe("warm");
     expect(style.transition).toBe("fade");
     expect(style.effects.has("slowmo")).toBe(true);
     expect(style.searchHints).toContain("erotic");
     expect(style.matched).toContain("에로틱");
-    expect(parseStyle("섹슈얼한 분위기").searchHints).toContain("sexual");
+    expect(parseStyle("nsfw, 섹슈얼한 분위기").searchHints).toContain("sexual");
   });
 });
 

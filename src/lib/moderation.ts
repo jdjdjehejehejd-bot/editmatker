@@ -18,8 +18,8 @@ interface Rule {
 const RULES: Rule[] = [
   {
     category: "성적",
-    ko: ["섹스", "야동", "포르노", "성인배우", "av배우", "성인비디오", "음란", "자위", "성인영상", "성인방송", "몰카", "야짤", "보지털", "자지털", "질싸", "펠라", "애널", "오나홀", "딸딸이", "가슴노출", "노출방송", "벗방", "조건만남", "성매매", "원조교제", "ㅅㅅ"],
-    en: ["porn", "porno", "pornographic", "pornography", "pornstar", "porn star", "adult film", "adult video", "pornhub", "xvideos", "xxx", "sex", "sexy", "nude", "nudes", "nudity", "naked", "nsfw", "hentai", "onlyfans", "boobs", "pussy", "blowjob", "handjob", "cumshot", "milf", "orgasm", "fetish", "bdsm", "stripper", "striptease", "erotic", "camgirl", "gonewild", "r34", "rule34"],
+    ko: ["섹스", "야동", "포르노", "성인배우", "av배우", "성인비디오", "음란", "자위", "성인영상", "성인방송", "몰카", "야짤", "보지털", "자지털", "질싸", "펠라", "애널", "오나홀", "딸딸이", "가슴노출", "노출방송", "벗방", "조건만남", "성매매", "원조교제", "ㅅㅅ", "에로틱", "에로", "섹슈얼", "섹시"],
+    en: ["porn", "porno", "pornographic", "pornography", "pornstar", "porn star", "adult film", "adult video", "pornhub", "xvideos", "xxx", "sex", "sexy", "sexual", "nude", "nudes", "nudity", "naked", "nsfw", "hentai", "onlyfans", "boobs", "pussy", "blowjob", "handjob", "cumshot", "milf", "orgasm", "fetish", "bdsm", "stripper", "striptease", "erotic", "camgirl", "gonewild", "r34", "rule34"],
   },
   {
     category: "욕설·혐오",
@@ -43,6 +43,8 @@ const SAFE_PHRASES = [
   "시발점", "시발역", "시발택시", "시발자동차",
   // 스포츠·일반 낱말 속에 금지어 글자가 들어 있는 경우 (선수 이름, 직업 등)
   "펠라이니", "애널리스트", "애널리틱스", "애널리시스", "자위대", "참수리",
+  // "업무 에로사항"처럼 성적 낱말과 글자만 겹치는 말
+  "에로사항",
 ];
 
 const LEET: Record<string, string> = { "0": "o", "1": "i", "3": "e", "4": "a", "5": "s", "7": "t", "@": "a", $: "s", "!": "i" };
@@ -77,9 +79,9 @@ export interface ModerationOptions {
 }
 
 /** NSFW 모드를 켜는 표시 — 띄어쓰기·기호(N.S.F.W, n s f w)도 같은 말로 봅니다.
- *  성적 성향을 그대로 적은 말(에로틱·섹슈얼)도 같은 뜻으로 읽습니다. */
-const NSFW_MARKERS = ["nsfw", "무검열", "노검열", "검열해제", "검열없", "19금", "에로틱", "에로", "섹슈얼"];
-const NSFW_LOOSE = /uncensored|no\s*censor|19\+|\berotic\b|\bsexual\b/i;
+ *  성적 표현(에로틱·섹슈얼·섹시 등)은 표시가 아니라 성적 낱말이라, 이것만 적으면 NSFW는 꺼진 채로 막힙니다. */
+const NSFW_MARKERS = ["nsfw", "무검열", "노검열", "검열해제", "검열없", "19금"];
+const NSFW_LOOSE = /uncensored|no\s*censor|19\+/i;
 
 /** 특징·분위기 문장에 NSFW 표시가 있는지 */
 export function isNsfwRequested(features: string | null | undefined): boolean {

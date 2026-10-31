@@ -446,6 +446,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
     // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
     if (isNsfwRequested(word)) continue;
+    // 성적 표현은 NSFW 표시가 있을 때만 검색어로 씁니다(없으면 입력 단계에서 막힘).
+    if (!nsfw && SENSUAL_WORDS.test(word)) continue;
     // 편집 스타일을 말하는 영어 단어(fade, fast cuts, grain 등)는 영상 검색어로 쓰지 않습니다.
     const styleWord = [...Object.values(MOOD_KEYWORDS), ...GRADE_KEYWORDS.map(([, re]) => re), ...EFFECT_KEYWORDS.map(([, re]) => re), ...PACE_KEYWORDS.map(([, re]) => re), ...TRANSITION_KEYWORDS.map(([, re]) => re)].some(re => re.test(word));
     if (!styleWord && !/^(?:cuts?|edits?|style|no|without|beats?|tempo|transitions?|effects?|feel|vibe|mood)$/i.test(word) && searchHints.length < 4) searchHints.push(word.toLowerCase());
