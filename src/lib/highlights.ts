@@ -29,6 +29,31 @@ export interface FrameSample {
 export const STATIC_MOTION = 0.004;
 /** 이보다 세부가 적으면 빈 화면(단색·심하게 흐림) */
 export const FLAT_DETAIL = 0.008;
+/** 실제 동작(카메라 이동을 뺀 움직임)이 이 정도면 "충분히 살아 있는" 영상으로 봅니다 */
+export const LIVELY_ACTION = 0.02;
+
+export interface VideoQuality {
+  /** 0~1: 영상 전체가 얼마나 살아 있는지 (움직임·멈춘 비율·빈 화면 비율) */
+  score: number;
+  /** 거의 내내 멈춰 있는 영상(사진 모음·슬라이드쇼·배경화면 영상) */
+  still: boolean;
+}
+
+/**
+ * 영상 전체의 살아 있는 정도. 장면 점수는 영상 안에서 상대적으로 매기므로, 영상 전체가 지루해도(사진 모음, 말만 하는 영상)
+ * 그 안의 "가장 나은 장면"이 다른 영상의 좋은 장면과 똑같이 쓰였습니다. 영상끼리 비교하려고 절대값으로 잽니다.
+ */
+export function assessVideo(samples: FrameSample[]): VideoQuality {
+  const live = samples.filter((s, i) => i > 0 && !s.cut);
+  if (live.length < 4) return { score: 1, still: false };
+  const actions = live.map(s => s.action ?? s.motion).sort((a, b) => a - b);
+  const median = actions[Math.floor(actions.length / 2)];
+  const frozen = live.filter(s => s.motion < STATIC_MOTION).length / live.length;
+  const flat = live.filter(s => s.detail !== undefined && s.detail < FLAT_DETAIL).length / live.length;
+  const score = Math.min(1, median / LIVELY_ACTION) * 0.6 + (1 - frozen) * 0.3 + (1 - flat) * 0.1;
+  return { score: Math.max(0, Math.min(1, score)), still: frozen > 0.6 || (median < STATIC_MOTION && frozen > 0.4) };
+}
+
 /** 같은 영상에서 가장 좋은 구간 점수의 이 비율보다 낮은 구간은 쓰지 않습니다(장면이 모자라면 좋은 장면을 다시 씀) */
 export const MIN_RELATIVE_SCORE = 0.45;
 

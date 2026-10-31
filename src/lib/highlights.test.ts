@@ -152,3 +152,25 @@ describe("특징 문장의 장면 선호로 점수", () => {
     expect(loud[2] - loud[0]).toBeGreaterThan(plain[2] - plain[0]);
   });
 });
+
+describe("영상 전체가 살아 있는지", () => {
+  const make = (motion: (i: number) => number, action?: (i: number) => number) =>
+    Array.from({ length: 80 }, (_, i) => ({ t: i * 0.25, motion: motion(i), action: action?.(i), audio: 0.2, color: 0.4, brightness: 0.5, cut: false, detail: 0.05 }));
+
+  it("사진 모음(거의 멈춤, 가끔 넘김)은 멈춘 영상으로", async () => {
+    const { assessVideo } = await import("./highlights");
+    const slideshow = make(i => (i % 16 === 0 ? 0.3 : 0.001), i => (i % 16 === 0 ? 0.3 : 0.001));
+    const quality = assessVideo(slideshow);
+    expect(quality.still).toBe(true);
+    expect(quality.score).toBeLessThan(0.2);
+  });
+
+  it("카메라만 따라가는 영상은 낮게, 실제 동작이 많은 영상은 높게", async () => {
+    const { assessVideo } = await import("./highlights");
+    const panning = assessVideo(make(() => 0.1, () => 0.004));
+    const action = assessVideo(make(() => 0.1, () => 0.04));
+    expect(panning.still).toBe(false);
+    expect(action.score).toBeGreaterThan(panning.score + 0.3);
+    expect(action.score).toBeCloseTo(1, 1);
+  });
+});

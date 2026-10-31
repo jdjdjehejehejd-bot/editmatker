@@ -37,6 +37,8 @@ export interface SourceVideo {
   uploadWeight?: number;
   /** 제목에 주제 이름은 없고 관련 주제만 나오는 영상 (칸이 모자라 채운 것) */
   relatedOnly?: boolean;
+  /** 거의 멈춘 영상이어도 씀 (다른 영상으로 칸을 다 못 채웠을 때) */
+  allowStill?: boolean;
   /** fallbackUrl까지 막히면 차례로 시도할 다른 주소 (예: Reddit의 미리보기 영상) */
   alternates?: string[];
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
