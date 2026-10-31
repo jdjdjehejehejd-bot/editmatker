@@ -185,6 +185,10 @@ input[type="range"]::-moz-range-thumb { width: 18px; height: 18px; border-radius
 .placeholder { position: absolute; inset: 0; display: grid; place-content: center; justify-items: center; gap: 12px; text-align: center; padding: 28px; color: rgba(255, 255, 255, 0.75); font-size: 13px; line-height: 1.6; background: radial-gradient(120% 70% at 50% 10%, #2c1a2e 0%, #000 70%); }
 .placeholder b { width: 64px; height: 64px; border-radius: 50%; display: grid; place-items: center; color: #fff; background: var(--ig); padding-left: 3px; box-shadow: 0 10px 30px -8px rgba(214, 41, 118, 0.7); }
 .placeholder p { margin: 0; max-width: 230px; }
+/* 만드는 동안 남는 경고 — 렌더링이 서버가 아니라 이 브라우저에서 돌아간다는 것을 알립니다. */
+.render-warning { margin: 0; padding: 8px 14px; background: #fff4dc; border-top: 1px solid #f3e0b5; border-bottom: 1px solid #f3e0b5; color: #7a4d00; font-size: 12px; font-weight: 500; line-height: 1.5; }
+.render-warning b { font-weight: 700; color: #5e3b00; }
+
 .reel-status { position: absolute; left: 12px; right: 12px; bottom: 12px; z-index: 2; color: #fff; font-size: 12px; font-weight: 600; text-shadow: 0 1px 4px rgba(0, 0, 0, 0.6); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .reel-actions { display: flex; align-items: center; gap: 4px; padding: 6px 8px 0; }

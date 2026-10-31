@@ -97,6 +97,8 @@ export default function App() {
   const [run, setRun] = useState<RunSnapshot | null>(null);
 
   const [status, setStatus] = useState<Status>("idle");
+  // 만드는 중에 다른 탭으로 옮겼는지 (백그라운드에서는 렌더링이 멈출 수 있음)
+  const [tabHidden, setTabHidden] = useState(false);
   const [step, setStepNow] = useState<{ id: StepId; detail: string; ratio?: number } | null>(null);
   // 속도: 진행률은 초당 수십 번 바뀌므로 화면 갱신을 0.1초에 한 번으로 묶습니다(단계가 바뀌면 바로 반영).
   const pendingStep = useRef<{ id: StepId; detail: string; ratio?: number } | null>(null);
@@ -294,6 +296,27 @@ export default function App() {
   };
 
   const stop = () => abortRef.current?.abort();
+
+  // 렌더링은 이 브라우저 안에서 실시간으로 돌아갑니다. 만드는 동안 창을 닫거나 다른 탭으로 옮기면
+  // 서버에 맡길 수 없어 작업이 거기서 끊기므로, 닫기 전에 한 번 물어보고 백그라운드 여부를 알려 줍니다.
+  useEffect(() => {
+    if (status !== "running") {
+      setTabHidden(false);
+      return;
+    }
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const watch = () => setTabHidden(document.hidden);
+    watch();
+    window.addEventListener("beforeunload", warn);
+    document.addEventListener("visibilitychange", watch);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      document.removeEventListener("visibilitychange", watch);
+    };
+  }, [status]);
 
   const downloadVideo = () => {
     if (!output) return;
@@ -779,6 +802,15 @@ export default function App() {
                 <MoreIcon />
               </span>
             </header>
+
+            {status === "running" && (
+              <p className="render-warning" role="status" aria-live="polite">
+                <b>영상 제작 중</b> — 창을 닫거나 다른 탭으로 옮기지 마세요.{" "}
+                {tabHidden
+                  ? "지금 다른 탭에 있어서 작업이 멈췄을 수 있어요. 이 탭으로 돌아와 주세요."
+                  : "서버가 아니라 이 브라우저에서 실시간으로 만드는 중이라, 창을 닫으면 처음부터 다시 해야 해요."}
+              </p>
+            )}
 
             <div className="reel-media">
               <div className="screen" style={{ aspectRatio: `${width} / ${height}`, width: `min(100%, calc(70vh * ${width / height}))` }}>
