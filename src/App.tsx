@@ -150,7 +150,7 @@ export default function App() {
     });
   const topicSpecs = useMemo(() => parseTopicInput(topic), [topic]);
   // 검열: 직접 쓴 제목·텍스트도 주제와 같은 기준으로 봅니다.
-  const overlayText = [overlay.title, ...overlay.texts.map(t => t.text)].join("\n");
+  const overlayText = [overlay.title, overlay.subtitle, ...overlay.texts.map(t => t.text)].join("\n");
   const blockedInput = useMemo(() => checkUserInput([topic, overlayText].join("\n"), features), [topic, overlayText, features]);
   const nsfwMode = useMemo(() => isNsfwRequested(features), [features]);
   const topicWeightSum = topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || 1;
@@ -254,7 +254,8 @@ export default function App() {
         style: pipeline.style,
         sources: pipeline.sources,
         title: pipeline.title,
-        subtitle: pipeline.style.label,
+        // 부제목은 직접 쓴 것만 넣습니다(편집 방식이 자동으로 붙지 않게).
+        subtitle: overlay.subtitle.trim(),
         credits: pipeline.credits,
         showTitle: overlay.showTitle,
         showCredits: overlay.showCredits,
@@ -536,7 +537,7 @@ export default function App() {
               <summary>
                 <strong>제목 · 텍스트</strong>
                 <small>
-                  {overlay.showTitle ? `제목 ${overlay.title.trim() ? `"${overlay.title.trim()}"` : "자동"}` : "제목 없음"} · {overlay.showCredits ? "출처 넣음" : "출처 없음"}
+                  {overlay.showTitle ? `제목 ${overlay.title.trim() ? `"${overlay.title.trim()}"` : "자동"}${overlay.subtitle.trim() ? " + 부제목" : ""}` : "제목 없음"} · {overlay.showCredits ? "출처 넣음" : "출처 없음"}
                   {overlay.texts.length ? ` · 텍스트 ${overlay.texts.length}개` : ""}
                 </small>
               </summary>
@@ -553,6 +554,20 @@ export default function App() {
                 placeholder={`제목 — 비우면 자동 (${topicSpecs.map(spec => spec.term).join(" × ") || "내 영상"})`}
                 aria-label="제목"
               />
+              <div className="subtitle-line">
+                <input
+                  className="select"
+                  value={overlay.subtitle}
+                  onChange={e => patchOverlay({ subtitle: e.target.value })}
+                  disabled={!overlay.showTitle}
+                  maxLength={MAX_TEXT_LENGTH}
+                  placeholder="부제목 — 비우면 없음"
+                  aria-label="부제목"
+                />
+                <button type="button" className="chip" disabled={!overlay.showTitle} onClick={() => patchOverlay({ subtitle: preview.label })} title="지금 편집 방식을 부제목으로 넣어요">
+                  편집 방식 넣기
+                </button>
+              </div>
               <label className="toggle">
                 <input type="checkbox" checked={overlay.showCredits} onChange={e => patchOverlay({ showCredits: e.target.checked })} />
                 <span>끝에 출처(크레딧) 넣기</span>
