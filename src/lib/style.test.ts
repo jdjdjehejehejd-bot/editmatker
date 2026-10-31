@@ -115,3 +115,26 @@ describe("특징 문장에서 편집 스타일 읽기", () => {
     expect(normal.pace).toBe("normal");
   });
 });
+
+describe("특징 문장의 장면 분위기", () => {
+  it("장면 낱말을 장면 선호로 읽음", () => {
+    expect(parseStyle("어두운 밤 장면 위주로, 관중 함성").scene).toMatchObject({ brightness: "dark", loud: true });
+    expect(parseStyle("선수 얼굴 클로즈업, 화려하게").scene).toMatchObject({ people: true, colorful: true });
+    expect(parseStyle("바다랑 파도, 자동차 질주").scene).toMatchObject({ subjects: ["ocean", "car racing"], intensity: "intense" });
+    expect(parseStyle("웅장하게").scene).toBeUndefined();
+  });
+
+  it("한 글자 낱말이 다른 말 속에 든 경우는 대상으로 보지 않음", () => {
+    expect(parseStyle("산책하는 느낌, 3개 장면").scene?.subjects).toBeUndefined();
+    expect(parseStyle("설산과 산 풍경").scene?.subjects).toEqual(["mountain"]);
+    expect(parseStyle("귀여운 개 영상").scene?.subjects).toEqual(["dog"]);
+  });
+
+  it("격렬한 장면은 컷을 빠르게(분위기가 이미 빠르면 그대로)", () => {
+    expect(parseStyle("웅장하고 장엄하게, 격렬한 장면").pace).toBe("fast");
+    expect(parseStyle("하이프, 격렬하게").pace).toBeUndefined();
+    expect(parseStyle("웅장하고 고요한 장면").pace).toBe("slow");
+    expect(parseStyle("고요한 장면").pace).toBeUndefined(); // 감성이라 이미 느림
+    expect(parseStyle("격렬한 장면, 천천히").pace).toBe("slow"); // 직접 말한 컷 속도가 우선
+  });
+});

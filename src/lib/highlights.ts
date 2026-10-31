@@ -1,6 +1,6 @@
 // 프레임 분석 결과에서 "볼 만한 순간"을 골라냅니다. 브라우저 API에 의존하지 않는 순수 함수입니다.
 
-import type { EditStyle } from "./style";
+import type { EditStyle, ScenePreference } from "./style";
 
 export interface FrameSample {
   t: number;
@@ -105,18 +105,34 @@ export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boole
  * 샘플마다 0~1 점수를 매깁니다.
  * @param presenceWeight 사람이 화면에 크게 나올수록 더할 가중치 (인물 주제에서 그 사람이 보이는 순간을 고르려고, 기본 0)
  */
-export function scoreSamples(samples: FrameSample[], weights: EditStyle["weights"], presenceWeight = 0): number[] {
+export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["weights"], basePresence = 0, scene?: ScenePreference): number[] {
   if (!samples.length) return [];
+  // 특징 문장이 말하는 장면(격렬한, 잔잔한, 함성, 얼굴, 화려한)일수록 높게 칩니다.
+  const weights = { ...baseWeights };
+  let presenceWeight = basePresence;
+  if (scene?.intensity === "intense") {
+    weights.motion *= 1.6;
+    weights.stability *= 0.3;
+  } else if (scene?.intensity === "calm") {
+    weights.motion *= 0.5;
+    weights.stability += 0.8;
+  }
+  if (scene?.loud) weights.audio *= 1.8;
+  if (scene?.colorful) weights.color *= 1.6;
+  if (scene?.people) presenceWeight += 0.6;
+  const brightnessWeight = scene?.brightness ? 0.4 : 0;
+  const light = brightnessWeight ? normalize(samples.map(s => s.brightness)) : null;
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
   // 카메라 이동을 뺀 실제 동작(action)을 재 두었으면 그걸 씁니다 — 카메라만 따라가는 걷기·견제 장면이 높게 나오지 않게.
   const motion = normalize(samples.map(s => (s.cut ? 0 : (s.action ?? s.motion))));
   const audio = normalize(samples.map(s => s.audio));
   const color = normalize(samples.map(s => s.color));
   const presence = presenceWeight ? normalize(samples.map(s => s.presence ?? 0)) : null;
-  const total = weights.motion + weights.audio + weights.color + weights.stability + presenceWeight || 1;
+  const total = weights.motion + weights.audio + weights.color + weights.stability + presenceWeight + brightnessWeight || 1;
   return samples.map((s, i) => {
     const stability = 1 - motion[i];
-    let score = (weights.motion * motion[i] + weights.audio * audio[i] + weights.color * color[i] + weights.stability * stability + (presence ? presenceWeight * presence[i] : 0)) / total;
+    const lightness = light ? (scene?.brightness === "dark" ? 1 - light[i] : light[i]) : 0;
+    let score = (weights.motion * motion[i] + weights.audio * audio[i] + weights.color * color[i] + weights.stability * stability + (presence ? presenceWeight * presence[i] : 0) + brightnessWeight * lightness) / total;
     // 검은 화면, 하얗게 날아간 화면, 정지된 자막 화면은 피합니다.
     if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
     if (s.color < 0.02) score *= 0.5;

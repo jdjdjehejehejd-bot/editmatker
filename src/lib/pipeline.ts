@@ -7,7 +7,8 @@ import { pickHighlights, scoreSamples, type Highlight } from "./highlights";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
-import { inferTopic, type InferredTopic } from "./vision";
+import { embed, inferTopic, posterFrame, subjectScores, uploadFrames, type InferredTopic } from "./vision";
+import { addSimilarity, centroid, cosine, rerankBySimilarity } from "./similarity";
 import { sanitizeWeight, uploadGroupWeight } from "./uploads";
 import { downloadTrack, findFreeMusic, trackCredit, type FreeTrack } from "./freemusic";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
@@ -96,6 +97,8 @@ export interface PipelineResult {
   track?: FreeTrack;
   /** 주제를 비웠을 때 올린 영상을 보고 고른 주제 */
   inferredTopic?: InferredTopic;
+  /** 주제와 올린 영상을 서로 닮은 쪽으로 맞췄는지 (찾은 영상은 올린 영상과 닮은 순, 올린 영상은 주제와 닮은 장면 우선) */
+  matched?: boolean;
   topicSummary: TopicSummary[];
 }
 
@@ -263,6 +266,34 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     const names = topics.map(t => `"${t.info.label}"`).join(", ");
     throw new Error(`${scope}${names} 영상을 찾지 못했어요. 제목에 이름이 나오는 영상만 쓰니, 이름을 정확히(또는 영어로) 입력해 보세요.\n\n${details}${censorNote}${relevanceNote}${formatNote}`);
   }
+  // 주제와 올린 영상을 함께 쓰면 서로 닮은 쪽으로 맞춥니다.
+  // 1) 올린 영상의 장면으로 "올린 영상다운 모습"을 만들고, 찾은 영상은 썸네일이 그와 닮은 순으로 앞당깁니다.
+  // 2) 찾은 영상 썸네일로 "주제다운 모습"을 만들어, 올린 영상 안에서는 그와 닮은 장면을 조금 더 높게 칩니다.
+  // 썸네일을 읽을 수 없거나(CORS) 모델을 못 받으면 하지 않고 그대로 진행합니다.
+  let uploadProfile: Float32Array | null = null;
+  let topicProfile: Float32Array | null = null;
+  if (uploadTopic && searching && online.length) {
+    events.step("search", "올린 영상과 닮은 영상을 고르는 중");
+    try {
+      uploadProfile = centroid(await embed(await uploadFrames(uploads, signal)));
+      const topicVectors: Float32Array[] = [];
+      for (const t of online) {
+        const top = t.candidates.slice(0, 12);
+        const posters = await Promise.all(top.map(c => (c.poster ? posterFrame(c.poster) : Promise.resolve(null))));
+        const readable = posters.map((p, i) => (p ? i : -1)).filter(i => i >= 0);
+        const vectors = await embed(readable.map(i => posters[i]!));
+        topicVectors.push(...vectors);
+        if (!uploadProfile) continue;
+        const profile = uploadProfile;
+        const similarity = new Map(readable.map((i, k) => [top[i].id, cosine(vectors[k], profile)]));
+        t.candidates = [...rerankBySimilarity(top, c => similarity.get(c.id) ?? null), ...t.candidates.slice(12)];
+      }
+      topicProfile = centroid(topicVectors);
+    } catch (error) {
+      if (signal.aborted) throw error;
+      uploadProfile = topicProfile = null;
+    }
+  }
   const failures: string[] = searching ? topics.filter(t => !t.candidates.length).map(t => `주제 "${t.info.label}": 영상을 찾지 못했어요`) : [];
   if (censored.length) failures.push(`검열: 부적절한 단어가 있는 영상 ${censored.length}개 제외`);
   if (irrelevant) failures.push(`관련성: 제목에 주제 이름이 없는 영상 ${irrelevant}개 제외`);
@@ -336,6 +367,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     url: string;
     analysis: VideoAnalysis;
     verdict: { blocked: boolean; reason: string | null; certain?: boolean };
+    /** 검열용 장면마다 상대편(올린 영상 ↔ 주제)과 닮은 정도 */
+    sims?: number[];
+    /** 검열용 장면마다 특징 문장이 말한 대상(바다·자동차·무대 등)이 보이는 정도 */
+    subjects?: number[];
   }
   interface Job {
     topic: TopicResult;
@@ -370,8 +405,14 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       // 스포츠 선수 주제는 경기 중 노출(상의 탈의 등)을 선정성으로 보지 않습니다.
       // 영상 제목·태그가 경기 영상이면(예: 주제는 도시인데 영상은 그 도시 팀 경기) 그 영상도 스포츠 기준으로 봅니다.
       const verdict = await screenFrames(analysis.keyframes, { ...policy, sports: isSportsJob(job) });
+      // 주제와 올린 영상을 함께 쓰면: 찾은 영상은 올린 영상과, 올린 영상은 주제(찾은 영상들)와 닮은 장면을 잽니다.
+      const target = candidate.file ? topicProfile : uploadProfile;
+      const sims = target && !verdict.blocked ? await embed(analysis.keyframes).then(vectors => vectors.map(v => cosine(v, target)), () => undefined) : undefined;
+      // 특징 문장이 "바다, 무대"처럼 찍힌 대상을 말했으면 그 대상이 보이는 장면을 잽니다.
+      const terms = style.scene?.subjects ?? [];
+      const subjects = terms.length && !verdict.blocked ? await subjectScores(analysis.keyframes, terms).catch(() => undefined) : undefined;
       analysis.keyframes = [];
-      return { url, analysis, verdict };
+      return { url, analysis, verdict, sims, subjects };
     } catch (error) {
       URL.revokeObjectURL(url);
       throw error;
@@ -411,7 +452,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
       try {
         const prepared = await job.promise;
         url = prepared.url;
-        const { analysis, verdict } = prepared;
+        const { analysis, verdict, sims, subjects } = prepared;
         const tally = screening.get(topic)!;
         tally.checked++;
         if (verdict.blocked) {
@@ -424,7 +465,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           throw new Error(verdict.reason ?? "부적절한 장면이 감지되어 제외했어요");
         }
         // 인물 주제는 그 사람이 크게 보이는 순간을 더 높게 칩니다.
-        const scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0);
+        // 특징 문장이 말하는 장면(밝기·동작 세기·함성·얼굴·화려함)과 찍힌 대상, 상대편과 닮은 정도를 함께 반영합니다.
+        let scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0, style.scene);
+        if (sims && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, sims);
+        if (subjects && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, subjects, 0.35);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
         // 가중치가 큰 올린 영상은 더 자주 나오므로 하이라이트도 그만큼 더 뽑아 같은 장면 반복을 줄입니다.
         const count = candidate.uploadWeight ? Math.ceil(perSource * candidate.uploadWeight) : perSource;
@@ -555,7 +599,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     }
     return { label: t.info.label, weight: t.weight, used, note };
   });
-  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined };
+  return { topics, title, style, sources: loaded, plan, music, credits, profile, topicSummary, track, inferredTopic: inferred ?? undefined, matched: Boolean(uploadProfile || topicProfile) };
 }
 
 /** 참고 에딧(올린 파일 + 인터넷에서 찾은 에딧, 합쳐 최대 3개)을 분석해 스타일 프로필을 만듭니다. 실패해도 생성은 계속합니다. */

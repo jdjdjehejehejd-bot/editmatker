@@ -116,6 +116,23 @@ const CLASS_TO_CATEGORY = (() => {
   return map;
 })();
 
+/** 장면마다 특징 문장이 말한 대상(묶음 term들)이 보일 확률의 합 (0~1) */
+export function subjectProbability(probs: ArrayLike<number>, terms: string[]): number {
+  const wanted = new Set(CATEGORIES.map((category, c) => (terms.includes(category.term) ? c : -1)).filter(c => c >= 0));
+  let sum = 0;
+  for (let i = 0; i < probs.length; i++) {
+    const c = CLASS_TO_CATEGORY.get(i);
+    if (c !== undefined && wanted.has(c)) sum += probs[i];
+  }
+  return Math.min(1, sum);
+}
+
+/** 장면들에 특징 문장이 말한 대상이 얼마나 보이는지 */
+export async function subjectScores(frames: HTMLCanvasElement[], terms: string[]): Promise<number[]> {
+  if (!frames.length || !terms.length) return [];
+  return (await classify(frames)).map(probs => subjectProbability(probs, terms));
+}
+
 /** 장면별 분류 확률(1000개)을 묶음별로 더해 평균 내고, 가장 높은 묶음을 고릅니다. */
 export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic | null {
   if (!frames.length) return null;
@@ -136,15 +153,19 @@ export function topicFromPredictions(frames: ArrayLike<number>[]): InferredTopic
 // ---------------------------------------------------------------------------
 // 모델
 
-type Model = { predict(input: unknown): { data(): Promise<Float32Array>; dispose(): void; shape: number[] } };
-let model: Promise<{ tf: typeof import("@tensorflow/tfjs"); net: Model }> | null = null;
+type Tensor = { data(): Promise<Float32Array>; dispose(): void; shape: number[] };
+type Model = { predict(input: unknown): Tensor };
+/** 분류 직전(전역 평균 풀링)의 특징 벡터 — 장면이 "어떻게 생겼는지"를 512개 숫자로 */
+const EMBEDDING_LAYER = "global_average_pooling2d_1";
+let model: Promise<{ tf: typeof import("@tensorflow/tfjs"); net: Model; embedder: Model }> | null = null;
 
 function loadModel() {
   model ??= (async () => {
     const tf = await import("@tensorflow/tfjs");
     await tf.ready();
-    const net = (await tf.loadLayersModel(MODEL_URL)) as unknown as Model;
-    return { tf, net };
+    const layers = await tf.loadLayersModel(MODEL_URL);
+    const embedder = tf.model({ inputs: layers.inputs, outputs: layers.getLayer(EMBEDDING_LAYER).output as never }) as unknown as Model;
+    return { tf, net: layers as unknown as Model, embedder };
   })().catch(error => {
     model = null;
     throw error;
@@ -155,6 +176,62 @@ function loadModel() {
 /** 영상을 올리고 주제를 비워 두면 미리 받아 둡니다(만들기를 누를 때 기다리지 않게). */
 export function preloadVision() {
   void loadModel().catch(() => undefined);
+}
+
+/** 224×224 장면들의 특징 벡터 (한 번에 배치로). 장면끼리 닮은 정도를 잴 때 씁니다. */
+export async function embed(frames: HTMLCanvasElement[]): Promise<Float32Array[]> {
+  if (!frames.length) return [];
+  const { tf, embedder } = await loadModel();
+  const input = tf.tidy(() => tf.stack(frames.map(frame => tf.browser.fromPixels(frame).toFloat().div(127.5).sub(1))));
+  const output = embedder.predict(input);
+  const size = output.shape[output.shape.length - 1];
+  const flat = await output.data();
+  output.dispose();
+  input.dispose();
+  return frames.map((_, f) => flat.slice(f * size, (f + 1) * size));
+}
+
+/** 올린 영상들의 장면 (영상마다 4장면, 가운데 정사각형) */
+export async function uploadFrames(files: File[], signal?: AbortSignal): Promise<HTMLCanvasElement[]> {
+  const frames: HTMLCanvasElement[] = [];
+  for (const file of files.slice(0, 6)) {
+    if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
+    frames.push(...(await grabFrames(file, signal).catch(() => [])));
+  }
+  return frames;
+}
+
+/**
+ * 썸네일 이미지를 224×224 장면으로. 다른 사이트 이미지가 그림을 읽지 못하게 막으면(CORS) null —
+ * 그 후보는 닮은 정도를 모르는 것으로 둡니다.
+ */
+export function posterFrame(url: string, timeoutMs = 4000): Promise<HTMLCanvasElement | null> {
+  return new Promise(resolve => {
+    const image = new Image();
+    image.crossOrigin = "anonymous";
+    const timer = setTimeout(() => finish(null), timeoutMs);
+    const finish = (value: HTMLCanvasElement | null) => {
+      clearTimeout(timer);
+      image.onload = image.onerror = null;
+      resolve(value);
+    };
+    image.onload = () => {
+      try {
+        const side = Math.min(image.naturalWidth, image.naturalHeight);
+        if (!side) return finish(null);
+        const canvas = document.createElement("canvas");
+        canvas.width = canvas.height = SIZE;
+        const ctx = canvas.getContext("2d")!;
+        ctx.drawImage(image, (image.naturalWidth - side) / 2, (image.naturalHeight - side) / 2, side, side, 0, 0, SIZE, SIZE);
+        ctx.getImageData(0, 0, 1, 1); // 읽을 수 없으면 여기서 오류
+        finish(canvas);
+      } catch {
+        finish(null);
+      }
+    };
+    image.onerror = () => finish(null);
+    image.src = url;
+  });
 }
 
 /** 224×224 장면들을 한 번에(배치로) 분류합니다(입력 -1~1). 출력이 확률이 아니면 softmax로 바꿉니다. */
