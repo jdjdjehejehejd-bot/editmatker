@@ -334,8 +334,21 @@ const HINT_DICTIONARY: [RegExp, string][] = [
   [/훈련|연습/, "training"],
 ];
 
+// NSFW 표시를 적었을 때만 쓰는 사전 — 성적 묘사를 그런 분위기의 영상을 찾는 영어 검색어로 옮깁니다.
+// 검열이 켜져 있으면 이런 낱말은 입력 단계에서 막히므로, NSFW 모드에서만 뜻을 살립니다.
+const NSFW_HINT_DICTIONARY: [RegExp, string][] = [
+  [/비키니|수영복|비치웨어|bikini|swimsuit/i, "bikini"],
+  [/란제리|링제리|속옷|브래지어|언더웨어|lingerie|underwear/i, "lingerie"],
+  [/섹시|야한|야하게|선정적|관능|유혹|노출|sexy|sensual|seductive/i, "sexy"],
+  [/누드|나체|벗은|벗고|탈의|nude|naked/i, "nude"],
+  [/몸매|글래머|볼륨|glamour|curvy/i, "curvy"],
+  [/폴댄스|봉춤|스트립|pole ?dance|striptease/i, "pole dance"],
+];
+
 export function parseStyle(features: string, options: { mood?: Mood } = {}): EditStyle {
   const text = features.trim();
+  // 특징·분위기에 NSFW 표시가 있으면 성적 묘사도 뜻이 있는 낱말로 읽습니다.
+  const nsfw = isNsfwRequested(text);
   const scores = (Object.keys(MOOD_KEYWORDS) as Mood[]).map(mood => ({
     mood,
     hits: (text.match(new RegExp(MOOD_KEYWORDS[mood].source, "gi")) ?? []).length,
@@ -400,7 +413,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   const tempoDown = !bpmMatch && !tempoUp && note(/느린 ?(?:비트|템포|음악|박자)|템포 ?느리|slow ?(?:beat|tempo)|down ?tempo/i);
   const bpm = bpmMatch ? clamp(Number(bpmMatch[1]), 60, 180) : clamp(preset.bpm + (tempoUp ? 15 : tempoDown ? -15 : 0), 60, 180);
 
-  const searchHints = [...new Set(HINT_DICTIONARY.filter(([re]) => re.test(text)).map(([, hint]) => hint))];
+  const hintDictionary = nsfw ? [...HINT_DICTIONARY, ...NSFW_HINT_DICTIONARY] : HINT_DICTIONARY;
+  const searchHints = [...new Set(hintDictionary.filter(([re]) => re.test(text)).map(([, hint]) => hint))];
   for (const word of text.match(/[A-Za-z][A-Za-z-]{2,}/g) ?? []) {
     // 검열 표시(NSFW 등)는 분위기 키워드가 아니므로 검색어에 넣지 않습니다.
     if (isNsfwRequested(word)) continue;

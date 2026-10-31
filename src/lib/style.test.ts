@@ -178,3 +178,19 @@ describe("특징 문장의 키워드", () => {
     expect(parseStyle("눈물 나는 장면").scene).toMatchObject({ people: true });
   });
 });
+
+describe("NSFW 특징", () => {
+  it("NSFW 표시를 적으면 성적 묘사도 검색 힌트·키워드로 읽는다", () => {
+    const style = parseStyle("nsfw, 섹시한 비키니");
+    expect(style.searchHints).toContain("bikini");
+    expect(style.searchHints).toContain("sexy");
+    expect(style.keywords).toEqual(expect.arrayContaining(["bikini", "sexy"]));
+    // 검열 표시 자체는 검색어가 아닙니다.
+    expect(style.searchHints).not.toContain("nsfw");
+  });
+
+  it("NSFW 표시가 없으면 성적 묘사를 검색어로 옮기지 않는다", () => {
+    expect(parseStyle("비키니").searchHints).not.toContain("bikini");
+    expect(parseStyle("섹시한 댄스").searchHints).toEqual(["dance"]);
+  });
+});
