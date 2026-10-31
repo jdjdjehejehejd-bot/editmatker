@@ -217,3 +217,37 @@ describe("NSFW 낱말을 편집 스타일 자동에서 읽음", () => {
     expect(parseStyle("비키니 엣지").matched).not.toContain("비키니");
   });
 });
+
+describe("NSFW 묘사를 편집 스타일 값에도 반영", () => {
+  it("성적 묘사만 적으면 느리고 부드러운 결로 편집한다", () => {
+    const style = parseStyle("nsfw, 섹시한 비키니");
+    expect(style.mood).toBe("emotional");
+    expect(style.grade).toBe("warm");
+    expect(style.effects.has("slowmo")).toBe(true);
+    expect(style.effects.has("zoom")).toBe(true);
+    expect(style.transition).toBe("fade");
+    expect(style.look?.glow).toBeGreaterThanOrEqual(0.5);
+    expect(style.look?.saturation).toBeGreaterThan(1);
+  });
+
+  it("직접 적은 분위기·색감이 성적 묘사보다 먼저다", () => {
+    const style = parseStyle("nsfw 섹시, 빠른 비트, 흑백");
+    expect(style.mood).toBe("hype");
+    expect(style.grade).toBe("mono");
+  });
+
+  it("빼 달라고 한 효과는 성적 묘사로도 넣지 않는다", () => {
+    // 하이프(빠른 비트)에 성적 묘사를 더하면 느린 화면이 붙지만, 빼 달라고 했으면 붙이지 않습니다.
+    expect(parseStyle("nsfw 섹시, 빠른 비트, 슬로모션 없이").effects.has("slowmo")).toBe(false);
+    expect(parseStyle("nsfw 섹시, 빠른 비트, 효과 없이").effects.has("slowmo")).toBe(false);
+  });
+
+  it("NSFW 표시가 없으면 편집 스타일 값은 예전 그대로다", () => {
+    const style = parseStyle("섹시한 비키니");
+    expect(style.mood).toBe("hype");
+    expect(style.grade).toBe("vivid");
+    expect(style.effects.has("slowmo")).toBe(false);
+    expect(style.transition).toBeUndefined();
+    expect(style.look).toBeUndefined();
+  });
+});

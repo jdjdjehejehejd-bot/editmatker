@@ -350,17 +350,24 @@ const NSFW_HINT_DICTIONARY: [RegExp, string][] = [
   [/폴댄스|봉춤|스트립|pole ?dance|striptease/i, "pole dance"],
 ];
 
+// NSFW 모드에서 성적 묘사를 적었을 때의 편집 결 — 따뜻한 색, 은은한 빛 번짐, 느린 화면.
+// 분위기·색감을 직접 적었으면 그쪽을 먼저 따르고, 여기서는 비어 있는 항목만 채웁니다.
+const SENSUAL_WORDS = /섹시|야한|야하게|선정적|관능|유혹|노출|에로|erotic|섹슈얼|sexual|섹스|\bsex\b|엣지|엣치|에치|エッチ|ecchi|etchi|비키니|수영복|비치웨어|란제리|링제리|속옷|브래지어|누드|나체|벗은|몸매|글래머|폴댄스|봉춤|스트립|sexy|sensual|seductive|bikini|swimsuit|lingerie|underwear|nude|naked|curvy|glamour|pole ?dance|striptease/i;
+
 export function parseStyle(features: string, options: { mood?: Mood } = {}): EditStyle {
   const text = features.trim();
   // 특징·분위기에 NSFW 표시가 있으면 성적 묘사도 뜻이 있는 낱말로 읽습니다.
   const nsfw = isNsfwRequested(text);
+  // NSFW 모드에서 성적 묘사를 적었으면 편집의 결(색·효과·전환)도 그쪽으로 맞춥니다.
+  const sensual = nsfw && SENSUAL_WORDS.test(text);
   const scores = (Object.keys(MOOD_KEYWORDS) as Mood[]).map(mood => ({
     mood,
     hits: (text.match(new RegExp(MOOD_KEYWORDS[mood].source, "gi")) ?? []).length,
   }));
   const best = scores.reduce((a, b) => (b.hits > a.hits ? b : a));
   // 분위기를 직접 골랐으면 그 분위기의 기본값(템포·컷 리듬·효과)을 씁니다.
-  const mood: Mood = options.mood ?? (best.hits > 0 ? best.mood : "hype");
+  // 성적 묘사만 적었으면 빠른 비트보다 느리고 부드러운 결을 기본으로 잡습니다.
+  const mood: Mood = options.mood ?? (best.hits > 0 ? best.mood : sensual ? "emotional" : "hype");
   const preset = MOOD_PRESETS[mood];
 
   const matched = new Set<string>();
@@ -370,7 +377,8 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
     return Boolean(hit);
   };
   if (!options.mood && best.hits > 0) note(MOOD_KEYWORDS[mood]);
-  const grade = GRADE_KEYWORDS.find(([, re]) => note(re))?.[0] ?? preset.grade;
+  const gradeHit = GRADE_KEYWORDS.find(([, re]) => note(re))?.[0];
+  let grade = gradeHit ?? preset.grade;
   const effects = new Set<Effect>(preset.effects);
   for (const [effect, re] of EFFECT_KEYWORDS) {
     const hit = re.exec(text)?.[0]?.trim();
@@ -387,6 +395,13 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   // 화면 느낌(밝기·대비·채도·빛 번짐·가장자리)과 흐름(드롭 위치·아웃트로)
   const look: Look = { ...NEUTRAL_LOOK };
   for (const rule of LOOK_RULES) if (note(rule.re)) rule.apply(look);
+  // 성적 묘사는 피부 톤이 살아나는 따뜻한 색과 은은한 빛 번짐으로 이어집니다.
+  if (sensual && !gradeHit) grade = "warm";
+  if (sensual) {
+    look.saturation = Math.max(look.saturation, 1.12);
+    look.glow = Math.max(look.glow, 0.5);
+    look.vignette = Math.max(look.vignette, 1.2);
+  }
   const structure: { dropRatio?: number; outroBeats?: number } = {};
   for (const rule of STRUCTURE_RULES) if (note(rule.re)) rule.apply(structure);
 
@@ -399,16 +414,23 @@ export function parseStyle(features: string, options: { mood?: Mood } = {}): Edi
   // 분위기가 이미 그 속도(하이프는 빠름, 감성은 느림)면 한 번 더 바꾸지 않습니다.
   const scenePace = scene.intensity === "intense" && mood !== "hype" ? "fast" : scene.intensity === "calm" && mood !== "emotional" ? "slow" : undefined;
   const pace = PACE_KEYWORDS.find(([, re]) => note(re))?.[0] ?? scenePace;
-  const transition = TRANSITION_KEYWORDS.find(([, re]) => note(re))?.[0];
+  const transition = TRANSITION_KEYWORDS.find(([, re]) => note(re))?.[0] ?? (sensual ? "fade" : undefined);
   const paceFactor = pace ? PACE_FACTOR[pace] : 1;
   const cutBeats =
     paceFactor === 1
       ? preset.cutBeats
       : { intro: scalePattern(preset.cutBeats.intro, paceFactor), drop: scalePattern(preset.cutBeats.drop, paceFactor), outro: scalePattern(preset.cutBeats.outro, paceFactor) };
-  if (/효과 ?없|깔끔|미니멀|clean|minimal/i.test(text)) {
+  const minimal = /효과 ?없|깔끔|미니멀|clean|minimal/i.test(text);
+  if (minimal) {
     effects.delete("glitch");
     effects.delete("shake");
     effects.delete("grain");
+  }
+  // 성적 묘사에 어울리는 느린 화면과 천천히 밀어 넣는 줌을 더합니다(빼 달라고 했으면 그대로 둠).
+  if (sensual && !minimal) {
+    for (const [effect, re] of EFFECT_KEYWORDS) {
+      if ((effect === "slowmo" || effect === "zoom") && !negated(text, re)) effects.add(effect);
+    }
   }
 
   const bpmMatch = /(\d{2,3})\s*bpm/i.exec(text);
