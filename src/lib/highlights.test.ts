@@ -100,3 +100,36 @@ describe("결정적 순간(임팩트)", () => {
     expect(srcEnd).toBeGreaterThan(23.5);
   });
 });
+
+describe("카메라만 움직이는 장면", () => {
+  it("카메라 이동을 빼면 걷기를 따라가는 화면은 작고, 화면 일부가 확 바뀌면 큼", async () => {
+    const { residualMotion } = await import("./framing");
+    const W = 64, H = 36;
+    const scene = (shift: number, burst = false) => Float32Array.from({ length: W * H }, (_, j) => {
+      const x = j % W, y = (j - x) / W;
+      let v = 0.5 + 0.4 * Math.sin((x + shift) * 0.7) * Math.cos(y * 0.5);
+      if (burst && x > 28 && x < 40 && y > 12 && y < 24) v = 1 - v;
+      return v;
+    });
+    const pan = residualMotion(scene(2), scene(0), W, H);
+    const hit = residualMotion(scene(0, true), scene(0), W, H);
+    expect(pan).toBeLessThan(0.01);
+    expect(hit).toBeGreaterThan(pan * 5);
+  });
+
+  it("스포츠: 결정적 순간이 없는 구간(걷기·세리머니)보다 있는 구간을 고름", async () => {
+    const { pickHighlights, scoreSamples } = await import("./highlights");
+    const { parseStyle } = await import("./style");
+    // 0~15초: 카메라가 따라가는 걷기(전체 움직임 큼, 실제 동작 작음), 20초: 펀치
+    const samples = Array.from({ length: 120 }, (_, i) => {
+      const t = i * 0.25;
+      const walking = t < 15;
+      const punch = Math.abs(t - 20) < 0.3;
+      return { t, motion: walking ? 0.12 : punch ? 0.2 : 0.03, action: walking ? 0.01 : punch ? 0.18 : 0.015, audio: punch ? 0.8 : 0.2, color: 0.4, brightness: 0.5, cut: false, detail: 0.05 };
+    });
+    const scores = scoreSamples(samples, parseStyle("").weights);
+    const [best] = pickHighlights("a", samples, scores, 3, 1, 30, { preferImpact: true });
+    expect(best.start).toBeGreaterThan(15);
+    expect(best.peak).toBeCloseTo(20, 0);
+  });
+});

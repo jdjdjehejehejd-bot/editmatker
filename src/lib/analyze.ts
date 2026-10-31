@@ -2,6 +2,7 @@
 
 import { contentBox, interestPoint, type ContentBox } from "./framing";
 import { detectCuts, type FrameSample } from "./highlights";
+import { residualMotion } from "./framing";
 
 const W = 64;
 const H = 36;
@@ -242,8 +243,11 @@ export async function analyzeVideo(
       motion /= n;
     }
     const focus = interestPoint(pixels, luma, previous, W, H);
+    // 카메라가 선수를 따라 움직이기만 해도(걷기·견제) 화면 전체가 바뀌어 움직임이 크게 잡히므로,
+    // 화면 전체의 이동을 빼고 남은 "실제 동작"을 따로 잽니다.
+    const action = previous ? residualMotion(luma, previous, W, H) : 0;
     previous = luma;
-    raw.push({ t: times[i], motion, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence });
+    raw.push({ t: times[i], motion, action, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence });
     onProgress((i + 1) / times.length);
   }
 

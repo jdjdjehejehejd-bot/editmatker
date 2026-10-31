@@ -8,6 +8,7 @@ import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
 import { inferTopic, type InferredTopic } from "./vision";
+import { sanitizeWeight, uploadGroupWeight } from "./uploads";
 import { downloadTrack, findFreeMusic, trackCredit, type FreeTrack } from "./freemusic";
 import { allocateSlots, combinedTitle, createTopicMatcher, expandQueries, mentionsSports, parseTopicInput } from "./topic";
 import type { StockKeys } from "./stock";
@@ -46,6 +47,8 @@ export interface PipelineInput {
   referenceFiles: File[];
   /** 편집에 쓸 영상을 직접 올린 파일 (주제 없이 이것만으로도 만들 수 있음) */
   uploadFiles?: File[];
+  /** 올린 파일마다 가중치 (uploadFiles와 같은 순서, 기본 ×1) */
+  uploadWeights?: number[];
   /** 영상을 찾지 않고 올린 영상만 편집 (주제는 제목·스타일·참고 에딧 학습에만 씀) */
   uploadsOnly?: boolean;
   /** 끝에 출처 화면을 붙일지 (배경음악 길이를 맞추려고, 기본 true) */
@@ -232,9 +235,16 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           sports: infos.some(info => info.sports),
           person: infos.some(info => info.person),
         },
-        weight: specs.length ? specs.reduce((sum, spec) => sum + spec.weight, 0) : 1,
+        // 모두 ×1이면 찾은 영상과 반반, 가중치를 올리면 올린 영상 쪽 비중이 커집니다.
+        weight: uploadGroupWeight(
+          specs.reduce((sum, spec) => sum + spec.weight, 0),
+          uploads.map((_, i) => sanitizeWeight(input.uploadWeights?.[i] ?? 1))
+        ),
         queries: [],
-        candidates: uploads.map(uploadedSource),
+        // 가중치가 큰 파일부터 받아, 칸이 모자라도 중요한 영상이 먼저 들어가게 합니다.
+        candidates: uploads
+          .map((file, i) => uploadedSource(file, i, sanitizeWeight(input.uploadWeights?.[i] ?? 1)))
+          .sort((a, b) => (b.uploadWeight ?? 1) - (a.uploadWeight ?? 1)),
         reports: [],
         irrelevant: 0,
       }
@@ -416,7 +426,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         // 인물 주제는 그 사람이 크게 보이는 순간을 더 높게 칩니다.
         const scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
-        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, perSource, analysis.duration);
+        // 가중치가 큰 올린 영상은 더 자주 나오므로 하이라이트도 그만큼 더 뽑아 같은 장면 반복을 줄입니다.
+        const count = candidate.uploadWeight ? Math.ceil(perSource * candidate.uploadWeight) : perSource;
+        // 스포츠 영상은 펀치·슛 같은 결정적 순간이 있는 구간을 우선합니다(걷기·세리머니·견제만 하는 장면은 뒤로).
+        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
         const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label };
         loaded.push(source);
@@ -496,7 +509,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   const usedWeight = active.filter(t => loadedBy.get(t)!.length).reduce((sum, t) => sum + t.weight, 0);
   for (const t of active) {
     const sources = loadedBy.get(t)!;
-    for (const source of sources) for (const h of source.highlights) h.weight = t.weight / usedWeight / sources.length;
+    // 주제 안에서는 영상마다 똑같이, 올린 영상은 파일 가중치 비율대로 나눕니다.
+    const sourceWeightSum = sources.reduce((sum, s) => sum + (s.uploadWeight ?? 1), 0);
+    for (const source of sources) for (const h of source.highlights) h.weight = ((t.weight / usedWeight) * (source.uploadWeight ?? 1)) / sourceWeightSum;
   }
 
   events.step("plan", "비트에 맞춰 컷을 배치하는 중");

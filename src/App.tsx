@@ -1,6 +1,7 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState, type CSSProperties, type ReactNode } from "react";
 import { FRAMING_LABEL, type Framing } from "./lib/framing";
 import { preloadVision, topicFromFileNames } from "./lib/vision";
+import { UPLOAD_WEIGHTS, uploadKey, uploadShares } from "./lib/uploads";
 import { DEFAULT_OVERLAY, MAX_TEXT_LENGTH, MAX_TEXTS, newText, TEXT_POSITION_LABEL, TEXT_SIZE_LABEL, type OverlaySettings, type TextOverlay, type TextPosition, type TextSize } from "./lib/overlay";
 import { MAX_UPLOADS, runPipeline, type LoadedSource, type PipelineResult, type QueryGroup, type StepId } from "./lib/pipeline";
 import { ASPECT_SIZE, renderEdit, type Aspect } from "./lib/render";
@@ -68,6 +69,9 @@ export default function App() {
   const [overrides, setOverrides] = useState<StyleOverrides>({});
   const [referenceFiles, setReferenceFiles] = useState<File[]>([]);
   const [uploadFiles, setUploadFiles] = useState<File[]>([]);
+  // 올린 파일마다 가중치 (파일 이름·크기로 기억해서, 다시 골라도 유지)
+  const [uploadWeights, setUploadWeights] = useState<Record<string, number>>({});
+  const weightOf = (file: File) => uploadWeights[uploadKey(file)] ?? 1;
   const [uploadsOnly, setUploadsOnly] = useState(false);
   const [overlay, setOverlay] = useState<OverlaySettings>(DEFAULT_OVERLAY);
   const [framing, setFraming] = useState<Framing>("auto");
@@ -75,6 +79,8 @@ export default function App() {
   const patchText = (index: number, patch: Partial<TextOverlay>) => setOverlay(current => ({ ...current, texts: current.texts.map((t, i) => (i === index ? { ...t, ...patch } : t)) }));
   const canStart = Boolean(topic.trim() || uploadFiles.length);
   // 주제를 비우고 영상을 올렸으면 주제를 고를 때 쓸 모델을 미리 받아 둡니다(파일 이름으로 정해지면 받지 않음).
+  // 주제를 비우고 올리면 비슷한 주제를 골라 섞으므로(고르면), 비율 안내도 그걸 가정합니다.
+  const needsTopicGuess = !topic.trim() && uploadFiles.length > 0;
   const needsVision = !topic.trim() && uploadFiles.length > 0 && !topicFromFileNames(uploadFiles.map(file => file.name));
   useEffect(() => {
     if (needsVision) preloadVision();
@@ -230,7 +236,7 @@ export default function App() {
       // 도우미를 페이지를 연 뒤에 켰을 수도 있으니 시작할 때 다시 확인합니다.
       const currentHelper = !isMobile && rememberedHelper() ? await connectHelper() : helper;
       const pipeline = await runPipeline(
-        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, freeMusic, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
+        { topic: topic.trim(), features, seconds, sourceCount, musicFile, musicStyle, freeMusic, styleOverrides: overrides, licenseMode, stockKeys, learnOnline, referenceFiles, uploadFiles, uploadWeights: uploadFiles.map(weightOf), uploadsOnly, showCredits: overlay.showCredits, title: overlay.title, helper: currentHelper.ytDlp ? currentHelper.base : null },
         {
           step: (id, detail, ratio) => setStep({ id, detail, ratio }),
           candidates: setCandidates,
@@ -401,8 +407,11 @@ export default function App() {
                 max={MAX_UPLOADS}
                 files={uploadFiles}
                 onChange={setUploadFiles}
+                weightOf={weightOf}
+                onWeight={(file, weight) => setUploadWeights(current => ({ ...current, [uploadKey(file)]: weight }))}
+                shares={uploadShares(uploadFiles.map(weightOf), topicSpecs.reduce((sum, spec) => sum + spec.weight, 0) || (needsTopicGuess ? 1 : 0), !uploadsOnly)}
                 label="영상 올리기"
-                hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 주제를 비우면 영상을 보고 비슷한 주제를 골라 찾은 영상과 섞어요`}
+                hint={`편집할 영상을 직접 올려요 (최대 ${MAX_UPLOADS}개) — 파일마다 ×1~×5로 비중을 정할 수 있고, 주제를 비우면 영상을 보고 비슷한 주제를 골라 섞어요`}
               />
               {uploadFiles.length > 0 && (
                 <label className="toggle">
@@ -977,7 +986,31 @@ const ShieldIcon = () => (
 );
 
 /** 기본 파일 입력 대신 쓰는 버튼 + 고른 파일 목록. 여러 개면 고를 때마다 더하고, 하나씩 뺄 수 있습니다. */
-function FilePick({ accept, multiple = false, max, files, onChange, label, hint }: { accept: string; multiple?: boolean; max: number; files: File[]; onChange: (files: File[]) => void; label: string; hint: string }) {
+function FilePick({
+  accept,
+  multiple = false,
+  max,
+  files,
+  onChange,
+  label,
+  hint,
+  weightOf,
+  onWeight,
+  shares,
+}: {
+  accept: string;
+  multiple?: boolean;
+  max: number;
+  files: File[];
+  onChange: (files: File[]) => void;
+  label: string;
+  hint: string;
+  /** 있으면 파일마다 가중치(×1~×5)를 고를 수 있게 합니다 */
+  weightOf?: (file: File) => number;
+  onWeight?: (file: File, weight: number) => void;
+  /** 파일마다 편집에서 차지할 대략의 비율 (0~1) */
+  shares?: number[];
+}) {
   // 같은 파일을 다시 고를 수 있게 고를 때마다 입력을 새로 만듭니다.
   const [inputKey, setInputKey] = useState(0);
   const pick = (picked: File[]) => {
@@ -1010,7 +1043,16 @@ function FilePick({ accept, multiple = false, max, files, onChange, label, hint 
           {files.map((file, i) => (
             <li key={`${file.name}-${file.size}-${i}`}>
               <span>{file.name}</span>
-              <small>{formatBytes(file.size)}</small>
+              <small>{shares?.[i] !== undefined ? `약 ${Math.round(shares[i] * 100)}%` : formatBytes(file.size)}</small>
+              {weightOf && onWeight && (
+                <select className="weight" value={weightOf(file)} onChange={e => onWeight(file, Number(e.target.value))} aria-label={`${file.name} 가중치`} title="클수록 편집에 자주 나와요">
+                  {UPLOAD_WEIGHTS.map(w => (
+                    <option key={w} value={w}>
+                      ×{w}
+                    </option>
+                  ))}
+                </select>
+              )}
               <button type="button" aria-label={`${file.name} 빼기`} onClick={() => onChange(files.filter((_, j) => j !== i))}>
                 ×
               </button>

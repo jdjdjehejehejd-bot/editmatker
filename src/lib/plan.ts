@@ -60,7 +60,7 @@ export function requiredHighlightLength(style: EditStyle, bpm = style.bpm) {
  * 출처별로 번갈아 가며 점수 순으로 섞어 같은 영상이 연달아 나오지 않게 합니다.
  * 영상마다 비중(weight)이 다르면 그 비율대로 자주 나오게 합니다(부드러운 가중 라운드 로빈).
  */
-export function interleaveBySource(highlights: Highlight[]): Highlight[] {
+export function interleaveBySource(highlights: Highlight[], length = highlights.length): Highlight[] {
   const groups = new Map<string, Highlight[]>();
   for (const h of [...highlights].sort((a, b) => b.score - a.score)) {
     if (!groups.has(h.sourceId)) groups.set(h.sourceId, []);
@@ -68,7 +68,11 @@ export function interleaveBySource(highlights: Highlight[]): Highlight[] {
   }
   const lanes = [...groups.values()].map(list => ({ list, next: 0, weight: Math.max(0.01, list[0].weight ?? 1), current: 0 }));
   const result: Highlight[] = [];
-  while (result.length < highlights.length) {
+  // 장면보다 컷이 많으면(length > 장면 수) 영상마다 자기 장면을 처음부터 다시 쓰며 비중을 지킵니다.
+  // 예전에는 다 쓴 영상이 빠져서, 짧은 영상에 큰 비중을 줘도 남은 컷이 다른 영상으로 채워졌습니다.
+  const wrap = length > highlights.length;
+  while (result.length < length && highlights.length) {
+    if (wrap) for (const lane of lanes) if (lane.next >= lane.list.length) lane.next = 0;
     const open = lanes.filter(lane => lane.next < lane.list.length);
     const total = open.reduce((sum, lane) => sum + lane.weight, 0);
     for (const lane of open) lane.current += lane.weight;
@@ -128,7 +132,7 @@ export function buildPlan(input: PlanInput): EditPlan {
     ...(outroBeats ? fillSection(style.cutBeats.outro, outroBeats) : []).map(beats => ({ section: "outro" as const, beats })),
   ];
 
-  const pool = interleaveBySource(input.highlights);
+  const pool = interleaveBySource(input.highlights, Math.max(input.highlights.length, sections.length));
   if (!pool.length) return { bpm, beatOffset, dropAt: beatOffset + dropBeat * beat, duration: 0, segments: [] };
 
   // 가장 좋은 장면은 드롭에, 그다음은 아웃트로, 나머지는 인트로에 배치합니다.

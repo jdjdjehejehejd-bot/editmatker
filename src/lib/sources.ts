@@ -33,6 +33,8 @@ export interface SourceVideo {
   tags?: string;
   /** 사용자가 직접 올린 영상 파일 (있으면 내려받지 않고 이 파일을 씀) */
   file?: File;
+  /** 올린 영상의 가중치 (×1~×5, 클수록 자주 나옴) */
+  uploadWeight?: number;
   /** mediaUrl을 받지 못했을 때 다시 시도할 주소 (예: 프록시) */
   fallbackUrl?: string;
   poster: string | null;
@@ -477,8 +479,9 @@ async function searchAllSources(
 }
 
 /** 사용자가 올린 영상 파일을 후보 영상으로 만듭니다. 검색 결과보다 먼저, 관련성 검사 없이 씁니다. */
-export function uploadedSource(file: File, index: number): SourceVideo {
+export function uploadedSource(file: File, index: number, weight = 1): SourceVideo {
   return {
+    uploadWeight: weight,
     id: `upload:${index}:${file.name}:${file.size}`,
     provider: "내 영상",
     title: file.name.replace(/\.[^.]+$/, "") || `내 영상 ${index + 1}`,

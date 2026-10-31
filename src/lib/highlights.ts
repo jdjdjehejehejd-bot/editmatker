@@ -21,6 +21,8 @@ export interface FrameSample {
   presence?: number;
   /** 화면의 세부(이웃 픽셀 밝기 차 평균) — 단색·뿌연 화면은 0에 가까움 */
   detail?: number;
+  /** 카메라 이동을 뺀 실제 동작의 크기 (motion은 카메라가 움직여도 커짐) */
+  action?: number;
 }
 
 /** 이보다 움직임이 적은 샘플은 멈춘 화면(정지 화면·자막 카드·슬라이드)으로 봅니다 */
@@ -52,10 +54,10 @@ export function impactSamples(samples: FrameSample[]): number[] {
     let n = 0;
     for (let j = Math.max(0, i - 3); j < i; j++) {
       if (samples[j].cut) continue;
-      before += samples[j].motion;
+      before += samples[j].action ?? samples[j].motion;
       n++;
     }
-    const motionJump = Math.max(0, s.motion - (n ? before / n : 0));
+    const motionJump = Math.max(0, (s.action ?? s.motion) - (n ? before / n : 0));
     const audioJump = Math.max(0, s.audio - samples[i - 1].audio);
     return { motionJump, audioJump };
   });
@@ -71,6 +73,8 @@ export function impactSamples(samples: FrameSample[]): number[] {
 
 /** 임팩트가 구간 안 이 위치(앞에서부터 비율)쯤 오게 구간을 다시 잡습니다 — 준비 동작과 맞은 뒤 반응까지 보이게 */
 export const PEAK_POSITION = 0.55;
+/** 스포츠 영상에서 결정적 순간이 없는 구간에 곱하는 값 */
+export const NO_IMPACT_FACTOR = 0.5;
 /** 이 정도 이상 튀어야 "임팩트"로 봅니다 */
 const IMPACT_MIN = 0.35;
 
@@ -104,7 +108,8 @@ export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boole
 export function scoreSamples(samples: FrameSample[], weights: EditStyle["weights"], presenceWeight = 0): number[] {
   if (!samples.length) return [];
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
-  const motion = normalize(samples.map(s => (s.cut ? 0 : s.motion)));
+  // 카메라 이동을 뺀 실제 동작(action)을 재 두었으면 그걸 씁니다 — 카메라만 따라가는 걷기·견제 장면이 높게 나오지 않게.
+  const motion = normalize(samples.map(s => (s.cut ? 0 : (s.action ?? s.motion))));
   const audio = normalize(samples.map(s => s.audio));
   const color = normalize(samples.map(s => s.color));
   const presence = presenceWeight ? normalize(samples.map(s => s.presence ?? 0)) : null;
@@ -131,7 +136,9 @@ export function pickHighlights(
   scores: number[],
   length: number,
   count: number,
-  duration: number
+  duration: number,
+  /** 스포츠처럼 결정적 순간이 중요한 영상: 그런 순간이 있는 영상이면, 없는 구간(걷기·세리머니·견제)은 크게 낮춥니다 */
+  options: { preferImpact?: boolean } = {}
 ): Highlight[] {
   if (!samples.length || duration < length) return [];
   const margin = Math.min(duration * 0.03, 3);
@@ -189,6 +196,9 @@ export function pickHighlights(
     if (average(start) >= average(w.start) * 0.9) w.start = start;
     // 옮기지 못했어도 임팩트가 구간 밖으로 밀려났으면 편집에서 쓰지 않게 지웁니다.
     if (w.peak < w.start || w.peak >= w.start + length) delete w.peak;
+  }
+  if (options.preferImpact && windows.some(w => w.peak !== undefined)) {
+    for (const w of windows) if (w.peak === undefined) w.score *= NO_IMPACT_FACTOR;
   }
   windows.sort((a, b) => b.score - a.score);
   // 의미 없는 구간을 채워 넣지 않도록, 가장 좋은 구간보다 많이 떨어지는 구간은 고르지 않습니다.

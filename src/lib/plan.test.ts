@@ -91,3 +91,13 @@ describe("직접 고른 전환", () => {
     expect(plan.segments.slice(1).every(s => s.transition === "fade")).toBe(true);
   });
 });
+
+describe("비중과 장면 다시 쓰기", () => {
+  it("장면이 모자라도 비중 큰 영상이 비중만큼 나옴 (다른 영상으로 채우지 않음)", () => {
+    const make = (sourceId: string, weight: number) => [0, 1, 2].map(i => ({ sourceId, start: 10 + i * 10, length: 4, score: 0.9 - i * 0.1, weight }));
+    const plan = buildPlan({ highlights: [...make("heavy", 0.8), ...make("light", 0.2)], style: parseStyle("빠른 컷"), totalSeconds: 30 });
+    const seconds = (id: string) => plan.segments.filter(s => s.sourceId === id).reduce((sum, s) => sum + s.duration, 0);
+    expect(plan.segments.length).toBeGreaterThan(6);
+    expect(seconds("heavy")).toBeGreaterThan(seconds("light") * 2);
+  });
+});
