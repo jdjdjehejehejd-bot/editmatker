@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { pickHighlights, scoreSamples, type FrameSample } from "./highlights";
-import { buildPlan } from "./plan";
+import { AFTER_HIT, buildPlan, velocitySource } from "./plan";
 import { detectSport } from "./sport";
 import { parseStyle } from "./style";
 
@@ -69,9 +69,31 @@ describe("결정적 순간 강조", () => {
     for (const s of hits) {
       expect(s.hitAt!).toBeGreaterThan(0);
       expect(s.hitAt!).toBeLessThan(s.duration);
-      expect(s.srcStart + s.hitAt! * s.rate).toBeCloseTo(22, 5);
+      // 벨로시티 컷은 재생 속도가 바뀌므로 그만큼 거꾸로 맞춤
+      const shown = s.velocity ? velocitySource(s.hitAt! / s.duration) * s.duration : s.hitAt! * s.rate;
+      expect(s.srcStart + shown).toBeCloseTo(22, 3);
     }
     // 강조 표시가 없는 장면에는 넣지 않음
     expect(buildPlan({ highlights: [{ sourceId: "a", start: 20, length: 4, score: 1, peak: 22 }], style: parseStyle(""), totalSeconds: 8 }).segments.some(s => s.hitAt !== undefined)).toBe(false);
+  });
+});
+
+describe("맞는 순간이 컷 안에", () => {
+  it("짧은 컷·다시 쓰는 장면에서도 임팩트가 컷 안에 있고 그 뒤 반응이 남음", () => {
+    const highlights = [
+      { sourceId: "a", start: 20, length: 4, score: 1, peak: 22.6, accent: true },
+      { sourceId: "b", start: 40, length: 4, score: 0.9, peak: 41.6, accent: true },
+    ];
+    // 장면이 두 개뿐이라 대부분 다시 쓰임
+    const plan = buildPlan({ highlights, style: parseStyle("빠르게 강렬한 격투기"), totalSeconds: 20 });
+    for (const s of plan.segments) {
+      const h = highlights.find(x => x.sourceId === s.sourceId)!;
+      const span = s.velocity ? velocitySource(1) * s.duration : s.duration * s.rate;
+      const offset = h.peak - s.srcStart;
+      if (h.length - s.duration * s.rate <= 0) continue;
+      expect(offset).toBeGreaterThan(0);
+      // 맞은 뒤 AFTER_HIT초(짧은 컷은 컷의 절반 남짓)가 남음
+      expect(span - offset).toBeGreaterThanOrEqual(Math.min(AFTER_HIT, span * 0.55) - 1e-6);
+    }
   });
 });

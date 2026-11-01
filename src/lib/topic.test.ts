@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { expandQueries, pickAliases, pickRelatedIds, resolveTopic, topicNames, type TopicInfo } from "./topic";
+import { expandQueries, pickAliases, pickRelatedIds, resolveTopic, similarName, topicNames, type TopicInfo } from "./topic";
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -55,7 +55,7 @@ describe("resolveTopic", () => {
       const url = new URL(input);
       const p = url.searchParams;
       if (p.get("action") === "wbsearchentities") return Response.json({ search: [] });
-      if (url.hostname === "ko.wikipedia.org") return Response.json({ query: { pages: { 1: { pageprops: { wikibase_item: "Q1" } } } } });
+      if (url.hostname === "ko.wikipedia.org") return Response.json({ query: { pages: { 1: { title: "뉴진스", pageprops: { wikibase_item: "Q1" } } } } });
       if (p.get("action") === "wbgetentities" && p.get("ids") === "Q1") {
         return Response.json({
           entities: {
@@ -74,6 +74,24 @@ describe("resolveTopic", () => {
     });
     const topic = await resolveTopic("뉴진스");
     expect(topic).toMatchObject({ label: "뉴진스", englishLabel: "NewJeans", commonsCategory: "NewJeans", aliases: ["NJZ"], related: ["Hanni", "Le Sserafim"] });
+  });
+
+  it("Wikipedia 본문 검색에 이름이 다른 문서가 걸리면 쓰지 않고 입력값 그대로", async () => {
+    vi.stubGlobal("fetch", async (input: string) => {
+      const url = new URL(input);
+      if (url.searchParams.get("action") === "wbsearchentities") return Response.json({ search: [] });
+      if (url.hostname.endsWith("wikipedia.org")) return Response.json({ query: { pages: { 1: { title: "장수인", pageprops: { wikibase_item: "Q9" } } } } });
+      return Response.json({ entities: { Q9: { labels: { ko: { value: "장수인" } } } } });
+    });
+    const topic = await resolveTopic("시릴가네테스트");
+    expect(topic.label).toBe("시릴가네테스트");
+  });
+
+  it("similarName: 띄어쓰기·표기가 조금 달라도 같은 이름", () => {
+    expect(similarName("시릴가네", "시릴 간")).toBe(true);
+    expect(similarName("ciryl gane", "Ciryl Gane (fighter)")).toBe(true);
+    expect(similarName("시릴가네", "장수인")).toBe(false);
+    expect(similarName("시릴가네", "존 존스")).toBe(false);
   });
 
   it("아무것도 못 찾으면 입력값 그대로 쓴다", async () => {
