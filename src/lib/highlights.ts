@@ -59,6 +59,9 @@ export function assessVideo(samples: FrameSample[]): VideoQuality {
 
 /** 같은 영상에서 가장 좋은 구간 점수의 이 비율보다 낮은 구간은 쓰지 않습니다(장면이 모자라면 좋은 장면을 다시 씀) */
 export const MIN_RELATIVE_SCORE = 0.45;
+/** 영상 하나에서 고른 장면이 이보다 적으면(같은 장면만 반복) 기준을 FILL_RELATIVE_SCORE까지 낮춰 더 고릅니다 */
+const MIN_VARIETY = 8;
+const FILL_RELATIVE_SCORE = 0.25;
 
 export interface Highlight {
   sourceId: string;
@@ -104,10 +107,11 @@ export function impactSamples(samples: FrameSample[]): number[] {
     const fall = m ? Math.max(0, level - after / m) : rise;
     // 크기가 아니라 "주변보다 얼마나 튀었는지"로 잽니다: 화면 전체가 계속 움직이는 장면에서 조금 더 커진 것보다,
     // 멀리서 찍혀 작게 보이는 선수의 펀치(가만있다가 확 움직임)가 더 결정적인 순간입니다.
-    // 그래서 크기 대신 "직전 움직임의 몇 배로 커졌는지"(최대 4배)를 씁니다. 화면 잡음 수준의 변화는 빼고요.
+    // 그래서 "직전 움직임의 몇 배로 커졌는지"(최대 4배)를 함께 봅니다. 다만 배수만 보면 거의 멈춘 화면(클로즈업)에서
+    // 조명이 살짝 깜빡인 것도 크게 튀어 보여서, 커진 크기와 배수를 함께(기하 평균) 씁니다. 화면 잡음 수준의 변화는 빼고요.
     const baseline = n ? before / n : level;
     const ratio = rise >= MIN_RISE ? Math.min(MAX_RATIO, rise / (baseline + LOCAL_FLOOR)) : 0;
-    const motionJump = rise > 0 ? ratio * (0.35 + 0.65 * Math.min(1, fall / rise)) : 0;
+    const motionJump = rise > 0 ? Math.sqrt(rise * ratio) * (0.35 + 0.65 * Math.min(1, fall / rise)) : 0;
     const audioJump = Math.max(0, s.audio - samples[i - 1].audio);
     return { motionJump, audioJump };
   });
@@ -430,10 +434,22 @@ export function pickHighlights(
   const floor = (windows[0]?.score ?? 0) * MIN_RELATIVE_SCORE;
   const chosen: Highlight[] = [];
   const gap = Math.max(length * 0.75, 1);
+  const apart = (w: Highlight) => chosen.every(c => Math.abs(c.start - w.start) >= length + gap * 0.25);
   for (const w of windows) {
     if (chosen.length && w.score < floor) break;
-    if (chosen.every(c => Math.abs(c.start - w.start) >= length + gap * 0.25)) chosen.push(w);
+    if (apart(w)) chosen.push(w);
     if (chosen.length >= count) break;
+  }
+  // 고른 장면이 너무 적으면 같은 장면 몇 개만 계속 반복되므로(영상 하나로 만들 때), 기준을 낮춰 조금 더 고릅니다.
+  // 그래도 결정적 순간이 있는 구간을 먼저, 아주 떨어지는 구간(멈춘 화면 등)은 빼고요.
+  const enough = Math.min(count, MIN_VARIETY);
+  if (chosen.length < enough) {
+    const lower = (windows[0]?.score ?? 0) * FILL_RELATIVE_SCORE;
+    const rest = windows.filter(w => !chosen.includes(w) && w.score >= lower).sort((a, b) => Number(b.peak !== undefined) - Number(a.peak !== undefined) || b.score - a.score);
+    for (const w of rest) {
+      if (chosen.length >= enough) break;
+      if (apart(w)) chosen.push(w);
+    }
   }
   return chosen;
 }
