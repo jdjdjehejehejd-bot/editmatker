@@ -193,7 +193,7 @@ export async function analyzeVideo(
    * 긴 영상을 두 번에 나눠 볼지: 처음엔 전체를 듬성듬성(각 지점은 바로 앞 장면과 비교해 그 순간의 움직임을 잼) 훑고,
    * 볼 만한 곳만 0.2초 간격으로 다시 봅니다. 몇 초 간격으로만 보면 펀치처럼 찰나인 순간을 놓치고 걷기·견제 장면이 고려됨.
    */
-  refine = false
+  refine: boolean | { wide?: boolean } = false
 ): Promise<VideoAnalysis> {
   const video = await loadVideo(url, signal);
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
@@ -313,7 +313,7 @@ export async function analyzeVideo(
           return { value, at };
         })
       : undefined;
-    const regions = pickRegions(overview, duration, REGION_SECONDS, regionCount, audioPeak);
+    const regions = pickRegions(overview, duration, REGION_SECONDS, regionCount, audioPeak, typeof refine === "object" && Boolean(refine.wide));
     const dense: FrameSample[] = [];
     for (const region of regions) {
       // 구간 첫 장면도 바로 앞 장면과 비교하도록 한 장 앞에서 시작합니다.

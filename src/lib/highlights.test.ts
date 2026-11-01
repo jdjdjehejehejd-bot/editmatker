@@ -239,3 +239,14 @@ describe("계속되는 큰 움직임 vs 확 튀는 순간", () => {
     expect(regions.filter(r => r.from > 300).length).toBeGreaterThanOrEqual(2);
   });
 });
+
+describe("격투기: 경기장 전경 우선", () => {
+  it("wide: 사람이 화면을 채우는 클로즈업을 낮춤", async () => {
+    const { scoreSamples } = await import("./highlights");
+    const samples: FrameSample[] = Array.from({ length: 40 }, (_, i) => ({ t: i * 0.2, motion: 0.02, action: 0.02, audio: 0.2, color: i % 2 ? 0.3 : 0.5, brightness: 0.5, cut: false, detail: 0.05, presence: i < 20 ? 0.6 : 0.05 }));
+    const plain = scoreSamples(samples, weights, 0.6);
+    const wide = scoreSamples(samples, weights, 0.6, undefined, { wide: true });
+    expect(plain[5]).toBeGreaterThan(plain[30]);
+    expect(wide[4]).toBeLessThan(wide[30]);
+  });
+});

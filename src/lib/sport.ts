@@ -27,13 +27,18 @@ export interface SportProfile {
    * 공격이 들어가는 순간이 핵심이라 크게 둡니다.
    */
   impactWeight: number;
+  /**
+   * 사람이 작게 보이는 넓은 장면(경기장 전경)을 우선할지. 격투기는 피부가 화면을 채우는 장면이 대개
+   * 경기 전 얼굴 클로즈업·입장·소개 장면이라, 사람이 크게 보이는 순간을 높게 치면 경기가 빠집니다.
+   */
+  wideShots: boolean;
 }
 
 export const SPORT_PROFILES: Record<SportKind, SportProfile> = {
-  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.25, useCameraMotion: false, peakPosition: 0.4, accent: true, impactWeight: 0.6 },
-  ball: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.2, driveBonus: 0.15, noImpactFactor: 0.6, useCameraMotion: false, peakPosition: 0.45, accent: true, impactWeight: 0.3 },
-  racing: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.1, driveBonus: 0.2, noImpactFactor: 0.8, useCameraMotion: true, peakPosition: 0.55, accent: false, impactWeight: 0 },
-  general: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0, driveBonus: 0, noImpactFactor: 0.5, useCameraMotion: false, peakPosition: 0.55, accent: true, impactWeight: 0 },
+  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.25, useCameraMotion: false, peakPosition: 0.4, accent: true, impactWeight: 0.6, wideShots: true },
+  ball: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.2, driveBonus: 0.15, noImpactFactor: 0.6, useCameraMotion: false, peakPosition: 0.45, accent: true, impactWeight: 0.3, wideShots: false },
+  racing: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.1, driveBonus: 0.2, noImpactFactor: 0.8, useCameraMotion: true, peakPosition: 0.55, accent: false, impactWeight: 0, wideShots: false },
+  general: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0, driveBonus: 0, noImpactFactor: 0.5, useCameraMotion: false, peakPosition: 0.55, accent: true, impactWeight: 0, wideShots: false },
 };
 
 const KIND_WORDS: [SportKind, RegExp][] = [
