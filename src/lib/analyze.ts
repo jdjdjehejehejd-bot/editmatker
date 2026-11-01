@@ -1,7 +1,7 @@
 // 내려받은 영상을 브라우저에서 훑어 프레임별 움직임·색·소리 세기를 측정합니다.
 
 import { contentBox, interestPoint, type ContentBox } from "./framing";
-import { detectCuts, type FrameSample } from "./highlights";
+import { detectCuts, pickRegions, type FrameSample } from "./highlights";
 import { residualMotion } from "./framing";
 
 const W = 64;
@@ -12,7 +12,10 @@ export interface VideoAnalysis {
   duration: number;
   width: number;
   height: number;
+  /** 장면 샘플. 긴 영상은 촘촘히 다시 본 구간들의 샘플(구간 첫 샘플에 gap) */
   samples: FrameSample[];
+  /** 긴 영상을 두 번에 나눠 봤을 때 처음 전체를 훑은 샘플 — 영상 전체가 얼마나 살아 있는지 잴 때 씀 */
+  overview?: FrameSample[];
   /** 검은 띠(레터박스·필러박스)를 뺀 실제 화면 영역 (0~1) */
   content?: ContentBox;
   /** 검열용 장면(224×224). 검사가 끝나면 비웁니다. */
@@ -148,25 +151,35 @@ export function seek(video: HTMLVideoElement, time: number): Promise<void> {
   });
 }
 
-async function audioEnvelope(blob: Blob, times: number[], step: number): Promise<number[]> {
-  if (blob.size > MAX_AUDIO_DECODE_BYTES) return times.map(() => 0);
+/** 소리 세기(RMS)를 아무 구간에서나 잴 수 있게 영상의 소리를 한 번만 풀어 둡니다. 못 풀면 null. */
+async function decodeAudio(blob: Blob): Promise<((from: number, to: number) => number) | null> {
+  if (blob.size > MAX_AUDIO_DECODE_BYTES) return null;
   try {
     const ctx = new OfflineAudioContext(1, 44100, 44100);
     const buffer = await ctx.decodeAudioData(await blob.arrayBuffer());
     const data = buffer.getChannelData(0);
     const rate = buffer.sampleRate;
-    return times.map(t => {
-      const from = Math.max(0, Math.floor(t * rate));
-      const to = Math.min(data.length, Math.floor((t + step) * rate));
+    return (fromT, toT) => {
+      const from = Math.max(0, Math.floor(fromT * rate));
+      const to = Math.min(data.length, Math.floor(toT * rate));
       let sum = 0;
       for (let i = from; i < to; i += 8) sum += data[i] * data[i];
       return Math.sqrt(sum / Math.max(1, (to - from) / 8));
-    });
+    };
   } catch {
     // 소리가 없거나 디코딩할 수 없는 영상
-    return times.map(() => 0);
+    return null;
   }
 }
+
+/** 긴 영상에서 두 번째로 촘촘히 볼 때의 샘플 간격(초) */
+const DENSE_STEP = 0.2;
+/** 듬성듬성 볼 때 각 지점의 움직임을 재려고 바로 앞에서 한 장 더 보는 간격(초) */
+const PAIR_GAP = 0.25;
+/** 촘촘히 다시 볼 구간 하나의 길이(초) */
+const REGION_SECONDS = 5;
+/** 첫 샘플 간격이 이보다 넓으면(긴 영상) 두 번에 나눠 봅니다 */
+const REFINE_STEP = 0.6;
 
 export async function analyzeVideo(
   blob: Blob,
@@ -175,22 +188,33 @@ export async function analyzeVideo(
   signal?: AbortSignal,
   maxSamples = DEFAULT_MAX_SAMPLES,
   /** 장면 사이 최소 간격(초). 빠른 컷을 세려는 참고 에딧 분석은 더 촘촘하게 봅니다. */
-  minStep = 0.25
+  minStep = 0.25,
+  /**
+   * 긴 영상을 두 번에 나눠 볼지: 처음엔 전체를 듬성듬성(각 지점은 바로 앞 장면과 비교해 그 순간의 움직임을 잼) 훑고,
+   * 볼 만한 곳만 0.2초 간격으로 다시 봅니다. 몇 초 간격으로만 보면 펀치처럼 찰나인 순간을 놓치고 걷기·견제 장면이 고려됨.
+   */
+  refine = false
 ): Promise<VideoAnalysis> {
   const video = await loadVideo(url, signal);
   const duration = Number.isFinite(video.duration) ? video.duration : 0;
   if (duration < 2) throw new Error("영상이 너무 짧아요.");
-  const step = Math.max(minStep, duration / maxSamples);
+  const evenStep = Math.max(minStep, duration / maxSamples);
+  const twoPass = refine && evenStep > REFINE_STEP;
+  // 두 번에 나눠 보면: 첫 번째는 지점마다 두 장(예산의 2/3), 두 번째는 촘촘히(예산만큼) — 전체로 예산의 1.7배쯤
+  const coarseCount = twoPass ? Math.max(20, Math.round(maxSamples / 3)) : maxSamples;
+  const step = twoPass ? duration / coarseCount : evenStep;
   const times: number[] = [];
-  for (let t = 0; t < duration - 0.1; t += step) times.push(t);
+  for (let t = twoPass ? step / 2 : 0; t < duration - 0.1; t += step) times.push(t);
+  const regionCount = twoPass ? Math.max(3, Math.floor(maxSamples / (REGION_SECONDS / DENSE_STEP + 2))) : 0;
+  const totalSeeks = times.length * (twoPass ? 2 : 1) + regionCount * Math.ceil(REGION_SECONDS / DENSE_STEP + 1);
+  let seeks = 0;
 
   const canvas = document.createElement("canvas");
   canvas.width = W;
   canvas.height = H;
   const ctx = canvas.getContext("2d", { willReadFrequently: true })!;
-  const audioPromise = audioEnvelope(blob, times, step);
+  const audioPromise = decodeAudio(blob);
 
-  const raw: Omit<FrameSample, "cut" | "audio">[] = [];
   // 전체 길이에 고르게 퍼진 장면을 검열용으로 따로 담아 둡니다.
   const keyframeAt = new Set(Array.from({ length: Math.min(KEYFRAMES, times.length) }, (_, k) => Math.floor(((k + 0.5) * times.length) / Math.min(KEYFRAMES, times.length))));
   const keyframes: HTMLCanvasElement[] = [];
@@ -201,16 +225,17 @@ export async function analyzeVideo(
   const colPeak = new Float32Array(W);
   const rowSum = new Float32Array(H);
   const colSum = new Float32Array(W);
-  for (let i = 0; i < times.length; i++) {
+  /** time의 장면을 재고, 바로 앞에 잰 장면(previous)과 비교해 움직임을 냅니다. record=false면 비교 기준만 잡음. */
+  const measure = async (time: number, keyframe: boolean): Promise<Omit<FrameSample, "cut" | "audio">> => {
     if (signal?.aborted) throw new DOMException("Aborted", "AbortError");
-    await seek(video, times[i]);
+    await seek(video, time);
     ctx.drawImage(video, 0, 0, W, H);
-    if (keyframeAt.has(i)) {
+    if (keyframe) {
       const frame = document.createElement("canvas");
       frame.width = frame.height = KEYFRAME_SIZE;
       frame.getContext("2d")!.drawImage(video, 0, 0, KEYFRAME_SIZE, KEYFRAME_SIZE);
       keyframes.push(frame);
-      keyframeTimes.push(times[i]);
+      keyframeTimes.push(time);
     }
     const pixels = ctx.getImageData(0, 0, W, H).data;
     const luma = new Float32Array(W * H);
@@ -251,14 +276,67 @@ export async function analyzeVideo(
     // 화면 전체의 이동을 빼고 남은 "실제 동작"을 따로 잽니다.
     const action = previous ? residualMotion(luma, previous, W, H) : 0;
     previous = luma;
-    raw.push({ t: times[i], motion, action, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence });
-    onProgress((i + 1) / times.length);
+    onProgress(Math.min(1, ++seeks / totalSeeks));
+    return { t: time, motion, action, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence };
+  };
+
+  const raw: Omit<FrameSample, "cut" | "audio">[] = [];
+  for (let i = 0; i < times.length; i++) {
+    // 두 번에 나눠 볼 때: 바로 앞 장면과 비교해야 그 순간의 움직임이 됩니다(몇 초 떨어진 장면과 비교하면 그냥 다른 장면).
+    if (twoPass) {
+      previous = null;
+      await measure(Math.max(0, times[i] - PAIR_GAP), false);
+    }
+    raw.push(await measure(times[i], keyframeAt.has(i)));
   }
 
-  const audio = await audioPromise;
+  const audioAt = await audioPromise;
+  const envelope = (list: number[], width: number) => (audioAt ? list.map(t => audioAt(t, t + width)) : list.map(() => 0));
   const cuts = detectCuts(raw.map(r => r.motion));
-  const samples = raw.map((r, i) => ({ ...r, audio: audio[i] ?? 0, cut: cuts[i] }));
-  const result = { duration, width: video.videoWidth, height: video.videoHeight, samples, keyframes, keyframeTimes, content: contentBox(rowPeak, colPeak) };
+  const overview: FrameSample[] = raw.map((r, i) => ({ ...r, audio: envelope([r.t], twoPass ? PAIR_GAP : step)[0], cut: cuts[i] }));
+  let samples = overview;
+  if (twoPass) {
+    // 각 지점 근처(앞뒤 반 간격)에서 소리가 가장 크게 튄 정도 — 타격음·함성이 난 곳
+    const audioPeak = audioAt
+      ? overview.map(s => {
+          let value = 0;
+          let at = s.t;
+          let last = audioAt(Math.max(0, s.t - step / 2 - 0.1), Math.max(0, s.t - step / 2));
+          for (let t = Math.max(0, s.t - step / 2); t < Math.min(duration, s.t + step / 2); t += 0.1) {
+            const level = audioAt(t, t + 0.1);
+            if (level - last > value) {
+              value = level - last;
+              at = t;
+            }
+            last = level;
+          }
+          return { value, at };
+        })
+      : undefined;
+    const regions = pickRegions(overview, duration, REGION_SECONDS, regionCount, audioPeak);
+    const dense: FrameSample[] = [];
+    for (const region of regions) {
+      // 구간 첫 장면도 바로 앞 장면과 비교하도록 한 장 앞에서 시작합니다.
+      previous = null;
+      await measure(Math.max(0, region.from - DENSE_STEP), false);
+      const part: Omit<FrameSample, "cut" | "audio">[] = [];
+      for (let t = region.from; t <= region.to; t += DENSE_STEP) part.push(await measure(t, false));
+      const partCuts = detectCuts(part.map(r => r.motion));
+      part.forEach((r, i) => dense.push({ ...r, audio: envelope([r.t], DENSE_STEP)[0], cut: partCuts[i], ...(i === 0 ? { gap: true } : {}) }));
+    }
+    if (dense.length) samples = dense;
+  }
+  onProgress(1);
+  const result: VideoAnalysis = {
+    duration,
+    width: video.videoWidth,
+    height: video.videoHeight,
+    samples,
+    ...(samples !== overview ? { overview } : {}),
+    keyframes,
+    keyframeTimes,
+    content: contentBox(rowPeak, colPeak),
+  };
   disposeVideo(video);
   return result;
 }

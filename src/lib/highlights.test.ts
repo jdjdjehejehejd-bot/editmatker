@@ -174,3 +174,41 @@ describe("영상 전체가 살아 있는지", () => {
     expect(action.score).toBeCloseTo(1, 1);
   });
 });
+
+describe("긴 영상: 볼 만한 곳만 촘촘히", () => {
+  const base = (t: number, extra: Partial<FrameSample> = {}): FrameSample => ({ t, motion: 0.02, action: 0.01, audio: 0.1, color: 0.4, brightness: 0.5, cut: false, detail: 0.05, ...extra });
+  it("pickRegions: 동작·소리가 튀는 곳을 겹치지 않게 고르고, 소리가 튄 시각을 가운데로", async () => {
+    const { pickRegions } = await import("./highlights");
+    const coarse = Array.from({ length: 40 }, (_, i) => base(i * 30 + 15, i === 10 ? { action: 0.2, motion: 0.2 } : i === 20 ? { action: 0.18, motion: 0.18 } : {}));
+    const audioPeak = coarse.map((s, i) => ({ value: i === 30 ? 1 : 0.05, at: i === 30 ? s.t + 9 : s.t }));
+    const regions = pickRegions(coarse, 1200, 5, 3, audioPeak);
+    expect(regions).toHaveLength(3);
+    const centers = regions.map(r => (r.from + r.to) / 2);
+    expect(centers.some(c => Math.abs(c - 315) < 0.01)).toBe(true);
+    expect(centers.some(c => Math.abs(c - 615) < 0.01)).toBe(true);
+    expect(centers.some(c => Math.abs(c - 924) < 0.01)).toBe(true);
+    for (let i = 1; i < regions.length; i++) expect(regions[i].from).toBeGreaterThanOrEqual(regions[i - 1].to);
+  });
+
+  it("따로 본 구간을 넘나드는 장면은 만들지 않고, 임팩트를 구간 안에서 잡음", async () => {
+    const { pickHighlights, scoreSamples, impactSamples } = await import("./highlights");
+    const region = (from: number, punchAt: number | null) =>
+      Array.from({ length: 26 }, (_, i) => {
+        const t = from + i * 0.2;
+        const hit = punchAt !== null && Math.abs(t - punchAt) < 0.05;
+        return base(t, { gap: i === 0, ...(hit ? { action: 0.25, motion: 0.25, audio: 0.6 } : {}) });
+      });
+    const samples = [...region(100, null), ...region(400, 402.4), ...region(700, null)];
+    // 구간 첫 샘플은 앞 구간과 비교하지 않음
+    expect(impactSamples(samples)[26]).toBe(0);
+    const picks = pickHighlights("a", samples, scoreSamples(samples, weights), 2, 3, 1200, { sport: "combat" });
+    expect(picks.length).toBeGreaterThan(0);
+    for (const p of picks) {
+      const inside = [100, 400, 700].some(from => p.start >= from - 1e-6 && p.start + p.length <= from + 5 + 0.45 + 1e-6);
+      expect(inside).toBe(true);
+    }
+    expect(picks[0].peak).toBeCloseTo(402.4, 5);
+    expect(picks[0].start).toBeLessThan(402.4);
+    expect(picks[0].start + picks[0].length).toBeGreaterThan(402.4 + 0.5);
+  });
+});

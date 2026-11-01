@@ -25,7 +25,7 @@ export interface SportProfile {
 }
 
 export const SPORT_PROFILES: Record<SportKind, SportProfile> = {
-  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.35, useCameraMotion: false, peakPosition: 0.5, accent: true },
+  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.25, useCameraMotion: false, peakPosition: 0.4, accent: true },
   ball: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.2, driveBonus: 0.15, noImpactFactor: 0.6, useCameraMotion: false, peakPosition: 0.45, accent: true },
   racing: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.1, driveBonus: 0.2, noImpactFactor: 0.8, useCameraMotion: true, peakPosition: 0.55, accent: false },
   general: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0, driveBonus: 0, noImpactFactor: 0.5, useCameraMotion: false, peakPosition: 0.55, accent: true },

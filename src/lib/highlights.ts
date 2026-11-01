@@ -24,6 +24,8 @@ export interface FrameSample {
   detail?: number;
   /** 카메라 이동을 뺀 실제 동작의 크기 (motion은 카메라가 움직여도 커짐) */
   action?: number;
+  /** 바로 앞 샘플과 이어지지 않음(긴 영상에서 따로 촘촘히 본 구간의 첫 샘플) — 구간을 넘어 비교하거나 이어 붙이지 않음 */
+  gap?: boolean;
 }
 
 /** 이보다 움직임이 적은 샘플은 멈춘 화면(정지 화면·자막 카드·슬라이드)으로 봅니다 */
@@ -77,10 +79,13 @@ export interface Highlight {
  */
 export function impactSamples(samples: FrameSample[]): number[] {
   const raw = samples.map((s, i) => {
-    if (s.cut || !i) return 0;
+    if (s.cut || s.gap || !i) return 0;
     let before = 0;
     let n = 0;
-    for (let j = Math.max(0, i - 3); j < i; j++) {
+    // 따로 본 구간(gap)의 앞 샘플과는 비교하지 않습니다.
+    let from = Math.max(0, i - 3);
+    for (let j = i; j > from; j--) if (samples[j].gap) from = j;
+    for (let j = from; j < i; j++) {
       if (samples[j].cut) continue;
       before += samples[j].action ?? samples[j].motion;
       n++;
@@ -103,6 +108,70 @@ export function impactSamples(samples: FrameSample[]): number[] {
 export const PEAK_POSITION = 0.55;
 /** 스포츠 영상에서 결정적 순간이 없는 구간에 곱하는 값 */
 export const NO_IMPACT_FACTOR = 0.5;
+/** 따로 본 구간의 마지막 샘플 뒤로 이만큼까지는 본 것으로 칩니다(샘플 간격 정도) */
+const REGION_SLACK = 0.45;
+
+/** 따로 본 구간(gap으로 나뉨)마다 처음·마지막 샘플 시각 */
+export function sampleRegions(samples: FrameSample[]): { from: number; to: number }[] {
+  const regions: { from: number; to: number }[] = [];
+  for (const sample of samples) {
+    if (!regions.length || sample.gap) regions.push({ from: sample.t, to: sample.t });
+    else regions[regions.length - 1].to = sample.t;
+  }
+  return regions;
+}
+
+/**
+ * 긴 영상은 처음에 듬성듬성(몇 초 간격) 볼 수밖에 없어 펀치처럼 찰나인 순간을 못 잡습니다.
+ * 듬성듬성 본 결과에서 볼 만해 보이는 곳(실제 동작·소리가 튀는 곳·사람이 크게 보이는 곳)을 골라,
+ * 그 근처만 촘촘히 다시 봅니다. 고른 곳끼리 겹치지 않고, 처음·끝(중계 시작·끝 화면)은 피합니다.
+ * @param audioPeak 샘플마다 그 근처(앞뒤 반 간격)에서 소리가 가장 크게 튄 정도와 시각 — 타격음·함성.
+ *   소리가 크게 튄 곳이면 그 시각을 가운데로 다시 봅니다(듬성듬성 본 지점은 그 순간과 몇 초 떨어져 있을 수 있음).
+ */
+export function pickRegions(
+  coarse: FrameSample[],
+  duration: number,
+  regionSeconds: number,
+  count: number,
+  audioPeak?: { value: number; at: number }[]
+): { from: number; to: number }[] {
+  if (!coarse.length || count <= 0) return [];
+  // 드물게 튀는 곳을 찾는 것이라 백분위(normalize)가 아니라 최솟값~최댓값으로 맞춥니다.
+  const byRange = (values: number[]) => {
+    const lo = Math.min(...values);
+    const range = Math.max(...values) - lo;
+    return range > 1e-9 ? values.map(v => (v - lo) / range) : values.map(() => 0);
+  };
+  const action = byRange(coarse.map(s => (s.cut ? 0 : (s.action ?? s.motion))));
+  const loud = byRange(audioPeak ? audioPeak.map(p => p.value) : coarse.map(s => s.audio));
+  const presence = byRange(coarse.map(s => s.presence ?? 0));
+  const margin = Math.min(duration * 0.03, 3);
+  const ranked = coarse
+    .map((s, i) => {
+      // 듬성듬성 본 한 지점의 움직임은 우연에 가깝고, 소리는 구간 전체를 훑은 것이라 소리를 비슷하게 칩니다.
+      let score = 0.4 * action[i] + 0.45 * loud[i] + 0.15 * presence[i];
+      // 검은 화면·멈춘 화면·빈 화면은 고르지 않습니다.
+      if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
+      // 한 지점만 보고 멈춘 화면이라 하기는 이르니, 소리가 크게 튄 곳이면 깎지 않습니다.
+      if (s.motion < STATIC_MOTION && loud[i] < 0.5) score *= 0.4;
+      if (s.detail !== undefined && s.detail < FLAT_DETAIL) score *= 0.3;
+      const center = audioPeak && loud[i] >= 0.5 && loud[i] > action[i] ? audioPeak[i].at : s.t;
+      return { t: center, score };
+    })
+    .filter(c => c.t >= margin && c.t <= duration - margin)
+    .sort((a, b) => b.score - a.score);
+  const half = regionSeconds / 2;
+  const regions: { from: number; to: number }[] = [];
+  for (const c of ranked) {
+    const from = Math.max(0, Math.min(c.t - half, duration - regionSeconds));
+    const to = Math.min(duration - 0.1, from + regionSeconds);
+    if (regions.some(r => from < r.to && to > r.from)) continue;
+    regions.push({ from, to });
+    if (regions.length >= count) break;
+  }
+  return regions.sort((a, b) => a.from - b.from);
+}
+
 /** 이 정도 이상 튀어야 "임팩트"로 봅니다 */
 const IMPACT_MIN = 0.35;
 
@@ -199,6 +268,7 @@ export function pickHighlights(
   const pace = profile?.driveBonus ? samples.map(s => (profile.useCameraMotion ? s.motion : (s.action ?? s.motion))) : null;
   const fastLine = pace ? [...pace].sort((a, b) => a - b)[Math.floor(pace.length * 0.7)] ?? 0 : 0;
   const windows: Highlight[] = [];
+  const refined = samples.some(sample => sample.gap);
   for (let i = 0; i < samples.length; i++) {
     const start = samples[i].t;
     const end = start + length;
@@ -210,7 +280,13 @@ export function pickHighlights(
     let peakIndex = -1;
     let hits = 0;
     let fast = 0;
+    let broken = false;
     for (let j = i; j < samples.length && samples[j].t < end; j++) {
+      // 따로 본 구간의 경계를 넘는 구간은 실제로 이어진 장면이 아니라 쓰지 않습니다.
+      if (j > i && samples[j].gap) {
+        broken = true;
+        break;
+      }
       sum += scores[j];
       n++;
       if (impact[j] >= impactMin && (peakIndex < 0 || impact[j] > impact[peakIndex])) peakIndex = j;
@@ -239,6 +315,8 @@ export function pickHighlights(
       }
       if (pace) sportBonus += profile.driveBonus * (fast / n);
     }
+    // 따로 본 구간의 끝을 넘어가는 구간(뒤쪽 장면을 실제로 보지 않음)도 쓰지 않습니다.
+    if (broken || (refined && n && samples[i + n - 1].t < end - REGION_SLACK)) continue;
     if (n) {
       const window: Highlight = { sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen) };
       if (peakIndex >= 0) {
@@ -263,10 +341,14 @@ export function pickHighlights(
     }
     return n ? sum / n : 0;
   };
+  // 촘촘히 본 구간들: 옮긴 구간이 그 구간 밖(보지 않은 곳)으로 나가지 않게 합니다.
+  const regions = refined ? sampleRegions(samples) : [{ from: -Infinity, to: Infinity }];
   for (const w of windows) {
     if (w.peak === undefined) continue;
     const peak = w.peak;
-    let start = Math.min(Math.max(margin, peak - peakPosition * length), duration - margin - length);
+    const region = regions.find(r => peak >= r.from && peak <= r.to) ?? regions[0];
+    let start = Math.min(Math.max(margin, region.from, peak - peakPosition * length), duration - margin - length, region.to + REGION_SLACK - length);
+    if (start < region.from) start = w.start;
     const lastCut = cutTimes.filter(t => t > start && t <= peak).pop();
     if (lastCut !== undefined) start = lastCut;
     if (average(start) >= average(w.start) * 0.9) w.start = start;

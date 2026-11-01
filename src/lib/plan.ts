@@ -117,10 +117,34 @@ export function pickTransition(style: EditStyle, section: Section, dropIndex: nu
 }
 
 /** 결정적 순간이 이 컷 안에서 언제 오는지 (강조할 순간이 없거나 컷 밖이면 없음) */
-function hitTime(h: Highlight, srcStart: number, rate: number, duration: number): number | undefined {
+function hitTime(h: Highlight, srcStart: number, rate: number, duration: number, velocity = false): number | undefined {
   if (!h.accent || h.peak === undefined) return undefined;
-  const at = (h.peak - srcStart) / rate;
+  let at = (h.peak - srcStart) / rate;
+  if (velocity) {
+    // 벨로시티: 원본 위치 → 컷 안의 시각 (velocitySource를 거꾸로 풂)
+    const target = at / duration;
+    if (target >= velocitySource(1)) return undefined;
+    let lo = 0;
+    let hi = 1;
+    for (let k = 0; k < 24; k++) {
+      const mid = (lo + hi) / 2;
+      if (velocitySource(mid) < target) lo = mid;
+      else hi = mid;
+    }
+    at = lo * duration;
+  }
   return at > 0.05 && at < duration - 0.05 ? at : undefined;
+}
+
+/** 맞은 뒤 반응까지 보이게 컷 안에 남길 시간(원본 초) */
+export const AFTER_HIT = 0.5;
+
+/**
+ * 벨로시티 컷에서 진행률 p(0~1)까지 보여 준 원본 길이(컷 길이 대비). 재생 속도가 1.55 − 1.1·sin(πp)로 바뀌므로
+ * (render.ts와 같은 식) 그 적분입니다. p=1이면 약 0.85.
+ */
+export function velocitySource(p: number): number {
+  return 1.55 * p - (1.1 / Math.PI) * (1 - Math.cos(Math.PI * p));
 }
 
 export function buildPlan(input: PlanInput): EditPlan {
@@ -175,15 +199,25 @@ export function buildPlan(input: PlanInput): EditPlan {
     const rate = style.effects.has("slowmo") && beats >= 4 && slowAllowed ? SLOWMO_RATE : 1;
     const srcLength = duration * rate;
     const shift = Math.max(0, h.length - srcLength);
-    // 결정적 순간(임팩트)이 있으면 컷 안의 박자 위치에 오게 시작점을 잡습니다 — 주먹을 내지르기 직전에 컷이 넘어가지 않고,
-    // 맞는 순간이 비트에 떨어지게. 2박 이상이면 가운데 박자, 1박이면 컷 가운데쯤.
-    const impactAt = beats >= 2 ? (Math.floor(beats / 2) / beats) * srcLength : srcLength * 0.5;
-    const srcStart =
-      h.peak !== undefined && shift > 0 && !reuse
-        ? Math.min(h.start + shift, Math.max(h.start, h.peak - impactAt))
-        : // 같은 장면을 다시 쓸 때는 시작점을 조금씩 밀어 반복감을 줄입니다.
-          h.start + (reuse ? ((reuse * 0.37) % 1) * shift : 0);
     const inDrop = section === "drop";
+    const velocity = style.effects.has("velocity") && inDrop && beats >= 2 && rate === 1;
+    // 벨로시티는 원본을 고르게 재생하지 않아(빠르게 → 느리게 → 빠르게) 컷 하나가 원본의 85%쯤만 보여 줍니다.
+    const srcSpan = velocity ? srcLength * velocitySource(1) : srcLength;
+    let srcStart: number;
+    if (h.peak !== undefined) {
+      // 결정적 순간(임팩트)이 있으면 컷 안의 박자 위치에 오게 시작점을 잡습니다 — 2박 이상이면 가운데 박자, 1박이면 컷 40% 지점.
+      // 맞는 순간 직후에 컷이 넘어가지 않게, 맞은 뒤 반응(AFTER_HIT초, 짧은 컷은 절반 이상)이 꼭 남게 합니다.
+      // 같은 장면을 다시 쓸 때도 임팩트는 컷 안에 두고, 위치만 조금 앞당겨 반복감을 줄입니다.
+      const after = Math.min(AFTER_HIT, srcSpan * 0.55);
+      const wanted = beats >= 2 ? (Math.floor(beats / 2) / beats) * srcSpan : srcSpan * 0.4;
+      const at = Math.max(Math.min(0.1, srcSpan * 0.2), Math.min(wanted, srcSpan - after) * (reuse ? 1 - 0.3 * ((reuse * 0.37) % 1) : 1));
+      // 임팩트가 장면 끝에 가까우면 장면 뒤(원본에서 바로 이어지는 부분)로 조금 넘어가서라도 맞은 뒤를 보여 줍니다.
+      const overrun = Math.max(0, after - (h.start + h.length - h.peak));
+      srcStart = Math.min(h.start + shift + overrun, Math.max(h.start, h.peak - at));
+    } else {
+      // 같은 장면을 다시 쓸 때는 시작점을 조금씩 밀어 반복감을 줄입니다.
+      srcStart = h.start + (reuse ? ((reuse * 0.37) % 1) * shift : 0);
+    }
     segments.push({
       sourceId: h.sourceId,
       srcStart,
@@ -196,8 +230,8 @@ export function buildPlan(input: PlanInput): EditPlan {
       glitch: style.effects.has("glitch") && inDrop && dropIndex % 4 === 3,
       shake: style.effects.has("shake") && inDrop,
       transition: i === 0 ? "cut" : pickTransition(style, section, inDrop ? dropIndex : -1),
-      velocity: style.effects.has("velocity") && inDrop && beats >= 2 && rate === 1,
-      hitAt: hitTime(h, srcStart, rate, duration),
+      velocity,
+      hitAt: hitTime(h, srcStart, rate, duration, velocity),
     });
     if (inDrop) dropIndex++;
     cursor += duration;

@@ -29,6 +29,8 @@ const LOOKAHEAD = POOL_SIZE - 2;
 const FADE_SECONDS = 0.35;
 const PUNCH_SECONDS = 0.18;
 /** 결정적 순간의 강조: 줌 세기, 번쩍 길이 */
+/** 시작 제목이 보이는 최대 시간(초) */
+const TITLE_SECONDS = 2.4;
 const HIT_ZOOM = 0.07;
 const HIT_FLASH_SECONDS = 0.08;
 const WHIP_SECONDS = 0.14;
@@ -164,7 +166,7 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       const samples = source.analysis?.samples ?? [];
       const shots: FocusPoint[][] = [[]];
       for (const s of samples) {
-        if (s.cut && shots[shots.length - 1].length) shots.push([]);
+        if ((s.cut || s.gap) && shots[shots.length - 1].length) shots.push([]);
         if (s.focusX !== undefined && s.focusY !== undefined) shots[shots.length - 1].push({ t: s.t, x: s.focusX, y: s.focusY });
       }
       return [source.id, shots.flatMap(shot => smoothTrack(shot))];
@@ -402,7 +404,8 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       }
     }
     // 인트로 타이틀
-    const titleEnd = plan.dropAt - 0.15;
+    // 제목은 잠깐만: 드롭 전이라도 TITLE_SECONDS 뒤에는 사라집니다(드롭이 늦으면 너무 오래 남았음).
+    const titleEnd = Math.min(plan.dropAt - 0.15, TITLE_SECONDS);
     if (titleLines.length && now < titleEnd) {
       const alpha = Math.min(1, now / 0.6, (titleEnd - now) / 0.4);
       const size = titleSize;

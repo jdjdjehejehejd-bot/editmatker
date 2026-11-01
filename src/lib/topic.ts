@@ -113,6 +113,41 @@ export function pickAliases(entity: any, exclude: string[]): string[] {
 }
 
 /** Wikidata 직접 검색이 실패하면 Wikipedia 검색으로 문서를 찾아 연결된 Wikidata 항목을 얻습니다. */
+/** 글자·숫자만 남긴 소문자(띄어쓰기·괄호 설명 무시) */
+function compactName(text: string) {
+  return text
+    .replace(/\s*\([^)]*\)\s*/g, " ")
+    .normalize("NFKD")
+    .replace(/\p{M}/gu, "")
+    .toLowerCase()
+    .replace(/[^\p{L}\p{N}]/gu, "");
+}
+
+/**
+ * 두 이름이 같은 대상을 가리킬 만큼 비슷한지: 한쪽이 다른 쪽을 품거나(띄어쓰기 무시), 글자 쌍이 40% 이상 겹침.
+ * "시릴가네"와 "시릴 간"은 비슷, "시릴가네"와 "장수인"은 다름.
+ */
+export function similarName(a: string, b: string): boolean {
+  const x = compactName(a);
+  const y = compactName(b);
+  if (!x || !y) return false;
+  if (x.includes(y) || y.includes(x)) return Math.min(x.length, y.length) >= 2;
+  const pairs = (text: string) => Array.from({ length: Math.max(0, [...text].length - 1) }, (_, i) => [...text].slice(i, i + 2).join(""));
+  const px = pairs(x);
+  const py = pairs(y);
+  if (!px.length || !py.length) return false;
+  const pool = [...py];
+  let shared = 0;
+  for (const pair of px) {
+    const k = pool.indexOf(pair);
+    if (k >= 0) {
+      shared++;
+      pool.splice(k, 1);
+    }
+  }
+  return (2 * shared) / (px.length + py.length) >= 0.4;
+}
+
 async function findEntityId(query: string, signal?: AbortSignal): Promise<string | null> {
   const languages = HANGUL.test(query) ? ["ko", "en"] : ["en", "ko"];
   const wikidata = (language: string) =>
@@ -126,6 +161,9 @@ async function findEntityId(query: string, signal?: AbortSignal): Promise<string
     )
       .then(data => {
         const page: any = Object.values(data?.query?.pages ?? {})[0];
+        // 본문 검색이라 이름이 전혀 다른 문서(입력한 이름이 본문에만 나오는 다른 선수·대회 문서)가 걸릴 수 있습니다.
+        // 문서 제목이 입력과 비슷할 때만 씁니다 — 아니면 입력한 그대로 찾습니다.
+        if (typeof page?.title !== "string" || !similarName(query, page.title)) return null;
         return typeof page?.pageprops?.wikibase_item === "string" ? (page.pageprops.wikibase_item as string) : null;
       })
       .catch(() => null);
