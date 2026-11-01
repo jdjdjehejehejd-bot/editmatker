@@ -43,6 +43,12 @@ export interface PlanInput {
   beatOffset?: number;
   /** 음악의 드롭 시점(초). 없으면 전체의 25% 지점의 마디로 잡습니다. */
   dropAt?: number;
+  /**
+   * 컷 하나의 최소 박자 수. 격투기는 한 박자(0.4초 남짓) 컷이면 펀치가 들어가기 전에 끊기므로 2박 이상으로.
+   */
+  minCutBeats?: number;
+  /** 번쩍임을 컷마다 넣지 않고 구간이 바뀔 때만 (결정적 순간 강조가 따로 있는 격투기 — 컷마다 번쩍이면 의미 없는 전환처럼 보임) */
+  quietCuts?: boolean;
 }
 
 export const SLOWMO_RATE = 0.65;
@@ -73,8 +79,20 @@ export function interleaveBySource(highlights: Highlight[], length = highlights.
   // 장면보다 컷이 많으면(length > 장면 수) 영상마다 자기 장면을 처음부터 다시 쓰며 비중을 지킵니다.
   // 예전에는 다 쓴 영상이 빠져서, 짧은 영상에 큰 비중을 줘도 남은 컷이 다른 영상으로 채워졌습니다.
   const wrap = length > highlights.length;
+  let round = 0;
   while (result.length < length && highlights.length) {
-    if (wrap) for (const lane of lanes) if (lane.next >= lane.list.length) lane.next = 0;
+    if (wrap) {
+      for (const lane of lanes) {
+        if (lane.next < lane.list.length) continue;
+        // 다시 쓸 때 같은 순서로 돌면 같은 장면 묶음이 통째로 반복돼 보이므로, 바퀴마다 순서를 바꿉니다
+        // (방금 쓴 장면이 바로 또 나오지 않게).
+        const last = lane.list[lane.list.length - 1];
+        round++;
+        lane.list = reorder(lane.list, round);
+        if (lane.list.length > 1 && lane.list[0] === last) lane.list.push(lane.list.shift()!);
+        lane.next = 0;
+      }
+    }
     const open = lanes.filter(lane => lane.next < lane.list.length);
     const total = open.reduce((sum, lane) => sum + lane.weight, 0);
     for (const lane of open) lane.current += lane.weight;
@@ -86,6 +104,13 @@ export function interleaveBySource(highlights: Highlight[], length = highlights.
     result.push(pick.list[pick.next++]);
   }
   return result;
+}
+
+/** 장면 목록을 바퀴마다 다른 순서로: 짝수 바퀴는 거꾸로, 그리고 바퀴 수만큼 돌림 */
+function reorder<T>(list: T[], round: number): T[] {
+  const base = round % 2 ? [...list].reverse() : [...list];
+  const shift = Math.floor((round * list.length) / 3) % Math.max(1, list.length);
+  return [...base.slice(shift), ...base.slice(0, shift)];
 }
 
 function fillSection(pattern: number[], totalBeats: number): number[] {
@@ -162,10 +187,12 @@ export function buildPlan(input: PlanInput): EditPlan {
   const wantedOutro = style.structure?.outroBeats ?? 4;
   const outroBeats = totalBeats - dropBeat >= 12 + wantedOutro ? wantedOutro : totalBeats - dropBeat >= 16 ? 4 : 0;
 
+  const atLeast = (pattern: number[]) => (input.minCutBeats ? pattern.map(beats => Math.max(input.minCutBeats!, beats)) : pattern);
+  const cutBeats = { intro: atLeast(style.cutBeats.intro), drop: atLeast(style.cutBeats.drop), outro: atLeast(style.cutBeats.outro) };
   const sections: { section: Section; beats: number }[] = [
-    ...fillSection(style.cutBeats.intro, dropBeat).map(beats => ({ section: "intro" as const, beats })),
-    ...fillSection(style.cutBeats.drop, totalBeats - dropBeat - outroBeats).map(beats => ({ section: "drop" as const, beats })),
-    ...(outroBeats ? fillSection(style.cutBeats.outro, outroBeats) : []).map(beats => ({ section: "outro" as const, beats })),
+    ...fillSection(cutBeats.intro, dropBeat).map(beats => ({ section: "intro" as const, beats })),
+    ...fillSection(cutBeats.drop, totalBeats - dropBeat - outroBeats).map(beats => ({ section: "drop" as const, beats })),
+    ...(outroBeats ? fillSection(cutBeats.outro, outroBeats) : []).map(beats => ({ section: "outro" as const, beats })),
   ];
 
   const pool = interleaveBySource(input.highlights, Math.max(input.highlights.length, sections.length));
@@ -226,7 +253,7 @@ export function buildPlan(input: PlanInput): EditPlan {
       rate,
       section,
       zoom: style.effects.has("zoom") ? (i % 2 === 0 ? "in" : "out") : "none",
-      flash: style.effects.has("flash") && (inDrop || section === "outro" || (i > 0 && sections[i - 1].section !== section)),
+      flash: style.effects.has("flash") && ((!input.quietCuts && (inDrop || section === "outro")) || (i > 0 && sections[i - 1].section !== section)),
       glitch: style.effects.has("glitch") && inDrop && dropIndex % 4 === 3,
       shake: style.effects.has("shake") && inDrop,
       transition: i === 0 ? "cut" : pickTransition(style, section, inDrop ? dropIndex : -1),

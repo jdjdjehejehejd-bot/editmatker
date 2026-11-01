@@ -364,6 +364,8 @@ export function pickHighlights(
   const refined = samples.some(sample => sample.gap);
   // 격투기: 경기장 바닥이 보이는 경기 장면이 아니면(입장·소개·클로즈업) 결정적 순간이 있어도 크게 낮춥니다.
   const arena = options.wide ? arenaLevels(samples) : null;
+  /** 경기장 밖이 섞인 구간 — 장면이 모자라 기준을 낮춰 더 고를 때도 쓰지 않음 */
+  const offArena = new Set<Highlight>();
   for (let i = 0; i < samples.length; i++) {
     const start = samples[i].t;
     const end = start + length;
@@ -419,10 +421,16 @@ export function pickHighlights(
       let inArena = 1;
       if (arena) {
         let sumArena = 0;
-        for (let j = i; j < i + n; j++) sumArena += arena[j];
-        inArena = 0.15 + 0.85 * (sumArena / n);
+        let outside = false;
+        for (let j = i; j < i + n; j++) {
+          sumArena += arena[j];
+          // 경기 장면 사이에 경기장 밖 화면(리플레이 전환 그래픽·얼굴·외관)이 끼어 있으면 그 컷은 의미 없는 전환이 됩니다.
+          if (arena[j] < 0.2) outside = true;
+        }
+        inArena = (0.15 + 0.85 * (sumArena / n)) * (outside ? 0.5 : 1);
       }
       const window: Highlight = { sourceId, start, length, score: Math.max(0, (base - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen * inArena) };
+      if (inArena < 0.6) offArena.add(window);
       if (peakIndex >= 0) {
         window.peak = samples[peakIndex].t;
         if (profile?.accent) window.accent = true;
@@ -482,7 +490,7 @@ export function pickHighlights(
   const enough = Math.min(count, MIN_VARIETY);
   if (chosen.length < enough) {
     const lower = (windows[0]?.score ?? 0) * FILL_RELATIVE_SCORE;
-    const rest = windows.filter(w => !chosen.includes(w) && w.score >= lower).sort((a, b) => Number(b.peak !== undefined) - Number(a.peak !== undefined) || b.score - a.score);
+    const rest = windows.filter(w => !chosen.includes(w) && w.score >= lower && !offArena.has(w)).sort((a, b) => Number(b.peak !== undefined) - Number(a.peak !== undefined) || b.score - a.score);
     for (const w of rest) {
       if (chosen.length >= enough) break;
       if (apart(w)) chosen.push(w);

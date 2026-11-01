@@ -40,6 +40,8 @@ export interface LoadedSource extends SourceVideo {
   analysis: VideoAnalysis;
   scores: number[];
   highlights: Highlight[];
+  /** 알아본 종목 (스포츠가 아니면 없음) */
+  sport?: SportKind | null;
   /** 이 영상을 찾은 주제 */
   topicLabel: string;
   /** 0~1 영상 전체가 얼마나 살아 있는지 (직접 올린 영상은 1) */
@@ -634,7 +636,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
           stillBackups.set(topic, [...(stillBackups.get(topic) ?? []), candidate]);
           throw new Error(STILL_VIDEO);
         }
-        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, topicLabel: topic.info.label, quality: candidate.file ? 1 : quality.score };
+        const source: LoadedSource = { ...candidate, duration: analysis.duration, url, analysis, scores, highlights, sport, topicLabel: topic.info.label, quality: candidate.file ? 1 : quality.score };
         failStreak.set(candidate.provider, 0);
         loaded.push(source);
         loadedBy.get(topic)!.push(source);
@@ -772,6 +774,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   }
 
   events.step("plan", "비트에 맞춰 컷을 배치하는 중");
+  // 격투기 영상이 대부분이면: 한 박자 컷은 펀치가 들어가기 전에 끊기므로 2박 이상으로, 번쩍임은 구간이 바뀔 때만
+  // (공격이 들어가는 순간의 강조는 따로 넣음).
+  const combat = loaded.length > 0 && loaded.filter(s => s.sport === "combat").length * 2 >= loaded.length;
   const plan = buildPlan({
     highlights: loaded.flatMap(s => s.highlights),
     style,
@@ -779,6 +784,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     bpm,
     beatOffset: userMusic?.beatOffset,
     dropAt: userMusic?.dropAt,
+    ...(combat ? { minCutBeats: 2, quietCuts: true } : {}),
   });
   const outroAt = plan.segments.find(s => s.section === "outro")?.start ?? plan.duration;
   const music = userMusic
