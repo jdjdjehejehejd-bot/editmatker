@@ -528,7 +528,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     const url = URL.createObjectURL(blob);
     try {
       report("analyze", `${candidate.title} 장면 분석 중`, 0);
-      const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples, undefined, true);
+      const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples * (slots <= 2 ? 2 : 1), undefined, true);
       // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
       if (!policy.nsfw) report("analyze", `${candidate.title} 장면 검열 중`);
       // 스포츠 선수 주제는 경기 중 노출(상의 탈의 등)을 선정성으로 보지 않습니다.

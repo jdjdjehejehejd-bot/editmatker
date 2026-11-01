@@ -90,7 +90,24 @@ export function impactSamples(samples: FrameSample[]): number[] {
       before += samples[j].action ?? samples[j].motion;
       n++;
     }
-    const motionJump = Math.max(0, (s.action ?? s.motion) - (n ? before / n : 0));
+    const level = s.action ?? s.motion;
+    const rise = Math.max(0, level - (n ? before / n : 0));
+    // 펀치처럼 확 튀었다가 가라앉는 움직임만 크게 칩니다. 카메라가 앞으로 따라가거나(입장 장면) 기둥이 지나가는 것처럼
+    // 큰 움직임이 계속되면 시작점만 튀어 보여서, 바로 뒤에도 그만큼 큰 움직임이 이어지면 낮춥니다.
+    let after = 0;
+    let m = 0;
+    for (let j = i + 1; j < Math.min(samples.length, i + 3); j++) {
+      if (samples[j].cut || samples[j].gap) break;
+      after += samples[j].action ?? samples[j].motion;
+      m++;
+    }
+    const fall = m ? Math.max(0, level - after / m) : rise;
+    // 크기가 아니라 "주변보다 얼마나 튀었는지"로 잽니다: 화면 전체가 계속 움직이는 장면에서 조금 더 커진 것보다,
+    // 멀리서 찍혀 작게 보이는 선수의 펀치(가만있다가 확 움직임)가 더 결정적인 순간입니다.
+    // 그래서 크기 대신 "직전 움직임의 몇 배로 커졌는지"(최대 4배)를 씁니다. 화면 잡음 수준의 변화는 빼고요.
+    const baseline = n ? before / n : level;
+    const ratio = rise >= MIN_RISE ? Math.min(MAX_RATIO, rise / (baseline + LOCAL_FLOOR)) : 0;
+    const motionJump = rise > 0 ? ratio * (0.35 + 0.65 * Math.min(1, fall / rise)) : 0;
     const audioJump = Math.max(0, s.audio - samples[i - 1].audio);
     return { motionJump, audioJump };
   });
@@ -108,6 +125,14 @@ export function impactSamples(samples: FrameSample[]): number[] {
 export const PEAK_POSITION = 0.55;
 /** 스포츠 영상에서 결정적 순간이 없는 구간에 곱하는 값 */
 export const NO_IMPACT_FACTOR = 0.5;
+/** 주변 움직임이 거의 없을 때 튄 정도를 잴 기준 (멈춘 화면 수준) */
+const LOCAL_FLOOR = 0.005;
+/** 이보다 작게 커진 것은 화면 잡음(압축·조명 깜빡임)으로 봄 */
+const MIN_RISE = 0.004;
+/** 직전보다 몇 배까지 커진 것을 구분할지 */
+const MAX_RATIO = 4;
+/** 함성이 결정타보다 이만큼(초) 늦게 터진다고 보고 다시 볼 곳을 앞당깁니다 */
+const ROAR_LEAD = 1;
 /** 따로 본 구간의 마지막 샘플 뒤로 이만큼까지는 본 것으로 칩니다(샘플 간격 정도) */
 const REGION_SLACK = 0.45;
 
@@ -155,19 +180,41 @@ export function pickRegions(
       // 한 지점만 보고 멈춘 화면이라 하기는 이르니, 소리가 크게 튄 곳이면 깎지 않습니다.
       if (s.motion < STATIC_MOTION && loud[i] < 0.5) score *= 0.4;
       if (s.detail !== undefined && s.detail < FLAT_DETAIL) score *= 0.3;
-      const center = audioPeak && loud[i] >= 0.5 && loud[i] > action[i] ? audioPeak[i].at : s.t;
+      // 함성은 결정타 뒤에 터지므로, 소리가 튄 곳이면 그보다 조금 앞을 가운데로 봅니다.
+      const center = audioPeak && loud[i] >= 0.5 && loud[i] > action[i] ? audioPeak[i].at - ROAR_LEAD : s.t;
       return { t: center, score };
     })
     .filter(c => c.t >= margin && c.t <= duration - margin)
     .sort((a, b) => b.score - a.score);
   const half = regionSeconds / 2;
   const regions: { from: number; to: number }[] = [];
-  for (const c of ranked) {
+  const take = (c: { t: number }) => {
     const from = Math.max(0, Math.min(c.t - half, duration - regionSeconds));
     const to = Math.min(duration - 0.1, from + regionSeconds);
-    if (regions.some(r => from < r.to && to > r.from)) continue;
+    if (regions.some(r => from < r.to && to > r.from)) return false;
     regions.push({ from, to });
+    return true;
+  };
+  // 절반은 전체에서 가장 볼 만한 곳, 나머지는 영상을 고르게 나눈 칸마다 가장 나은 곳 — 한 장면(입장·경기 뒤)에 몰리지 않고
+  // 경기 전체를 살펴보게.
+  const best = Math.ceil(count / 2);
+  for (const c of ranked) {
+    if (regions.length >= best) break;
+    take(c);
+  }
+  // 영상을 count칸으로 나누고, 이미 본 곳에서 가장 먼 칸부터 그 칸의 가장 나은 곳을 고릅니다.
+  const open = Array.from({ length: count }, (_, k) => ({ lo: (duration * k) / count, hi: (duration * (k + 1)) / count })).filter(
+    slice => !regions.some(r => r.from < slice.hi && r.to > slice.lo)
+  );
+  while (regions.length < count && open.length) {
+    const distance = (slice: { lo: number; hi: number }) => Math.min(...regions.map(r => Math.abs((r.from + r.to) / 2 - (slice.lo + slice.hi) / 2)), Infinity);
+    open.sort((a, b) => distance(b) - distance(a));
+    const slice = open.shift()!;
+    ranked.find(c => c.t >= slice.lo && c.t < slice.hi && take(c));
+  }
+  for (const c of ranked) {
     if (regions.length >= count) break;
+    take(c);
   }
   return regions.sort((a, b) => a.from - b.from);
 }
@@ -318,7 +365,10 @@ export function pickHighlights(
     // 따로 본 구간의 끝을 넘어가는 구간(뒤쪽 장면을 실제로 보지 않음)도 쓰지 않습니다.
     if (broken || (refined && n && samples[i + n - 1].t < end - REGION_SLACK)) continue;
     if (n) {
-      const window: Highlight = { sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen) };
+      // 종목에 따라 장면 자체(움직임·색·소리)보다 결정적 순간의 세기를 더 봅니다.
+      const weight = profile?.impactWeight ?? 0;
+      const base = (1 - weight) * (sum / n) + weight * (peakIndex >= 0 ? impact[peakIndex] : 0);
+      const window: Highlight = { sourceId, start, length, score: Math.max(0, (base - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen) };
       if (peakIndex >= 0) {
         window.peak = samples[peakIndex].t;
         if (profile?.accent) window.accent = true;

@@ -22,13 +22,18 @@ export interface SportProfile {
   peakPosition: number;
   /** 편집에서 임팩트 순간에 살짝 줌·번쩍 강조를 넣을지 */
   accent: boolean;
+  /**
+   * 구간 점수에서 임팩트(결정적 순간)가 차지하는 비중 0~1. 격투기는 화려하게 움직이는 입장·관중 장면보다
+   * 공격이 들어가는 순간이 핵심이라 크게 둡니다.
+   */
+  impactWeight: number;
 }
 
 export const SPORT_PROFILES: Record<SportKind, SportProfile> = {
-  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.25, useCameraMotion: false, peakPosition: 0.4, accent: true },
-  ball: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.2, driveBonus: 0.15, noImpactFactor: 0.6, useCameraMotion: false, peakPosition: 0.45, accent: true },
-  racing: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.1, driveBonus: 0.2, noImpactFactor: 0.8, useCameraMotion: true, peakPosition: 0.55, accent: false },
-  general: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0, driveBonus: 0, noImpactFactor: 0.5, useCameraMotion: false, peakPosition: 0.55, accent: true },
+  combat: { impactMin: 0.25, comboBonus: 0.08, climaxBonus: 0.05, driveBonus: 0, noImpactFactor: 0.25, useCameraMotion: false, peakPosition: 0.4, accent: true, impactWeight: 0.6 },
+  ball: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.2, driveBonus: 0.15, noImpactFactor: 0.6, useCameraMotion: false, peakPosition: 0.45, accent: true, impactWeight: 0.3 },
+  racing: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0.1, driveBonus: 0.2, noImpactFactor: 0.8, useCameraMotion: true, peakPosition: 0.55, accent: false, impactWeight: 0 },
+  general: { impactMin: 0.35, comboBonus: 0, climaxBonus: 0, driveBonus: 0, noImpactFactor: 0.5, useCameraMotion: false, peakPosition: 0.55, accent: true, impactWeight: 0 },
 };
 
 const KIND_WORDS: [SportKind, RegExp][] = [

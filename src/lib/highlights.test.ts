@@ -186,7 +186,8 @@ describe("긴 영상: 볼 만한 곳만 촘촘히", () => {
     const centers = regions.map(r => (r.from + r.to) / 2);
     expect(centers.some(c => Math.abs(c - 315) < 0.01)).toBe(true);
     expect(centers.some(c => Math.abs(c - 615) < 0.01)).toBe(true);
-    expect(centers.some(c => Math.abs(c - 924) < 0.01)).toBe(true);
+    // 함성(소리)은 결정타 뒤에 터지므로 1초 앞을 가운데로
+    expect(centers.some(c => Math.abs(c - 923) < 0.01)).toBe(true);
     for (let i = 1; i < regions.length; i++) expect(regions[i].from).toBeGreaterThanOrEqual(regions[i - 1].to);
   });
 
@@ -210,5 +211,31 @@ describe("긴 영상: 볼 만한 곳만 촘촘히", () => {
     expect(picks[0].peak).toBeCloseTo(402.4, 5);
     expect(picks[0].start).toBeLessThan(402.4);
     expect(picks[0].start + picks[0].length).toBeGreaterThan(402.4 + 0.5);
+  });
+});
+
+describe("계속되는 큰 움직임 vs 확 튀는 순간", () => {
+  const base = (t: number, extra: Partial<FrameSample> = {}): FrameSample => ({ t, motion: 0.01, action: 0.01, audio: 0.1, color: 0.4, brightness: 0.5, cut: false, detail: 0.05, ...extra });
+  it("카메라가 따라가며 계속 큰 움직임(입장 장면)보다 튀었다 가라앉는 펀치를 높게", async () => {
+    const { impactSamples } = await import("./highlights");
+    const samples = Array.from({ length: 60 }, (_, i) => {
+      const t = i * 0.2;
+      if (t >= 2 && t < 5) return base(t, { motion: 0.08, action: 0.08 }); // 계속
+      if (Math.abs(t - 8) < 0.05) return base(t, { motion: 0.08, action: 0.08 }); // 한 번
+      return base(t);
+    });
+    const impact = impactSamples(samples);
+    const sustained = Math.max(...impact.slice(10, 25));
+    const punch = impact[40];
+    expect(punch).toBeGreaterThan(sustained * 1.8);
+  });
+
+  it("pickRegions: 절반은 영상 전체에 고르게 퍼뜨림(한 장면에 몰리지 않게)", async () => {
+    const { pickRegions } = await import("./highlights");
+    // 앞쪽(입장)에만 큰 움직임
+    const coarse = Array.from({ length: 60 }, (_, i) => base(i * 10 + 5, i < 10 ? { action: 0.1 + i * 0.01, motion: 0.1 } : { action: 0.02, motion: 0.02 }));
+    const regions = pickRegions(coarse, 600, 5, 6);
+    expect(regions).toHaveLength(6);
+    expect(regions.filter(r => r.from > 300).length).toBeGreaterThanOrEqual(2);
   });
 });
