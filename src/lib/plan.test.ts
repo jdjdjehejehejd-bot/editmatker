@@ -122,3 +122,29 @@ describe("흐름", () => {
     expect(outro("여운 있게")).toBeGreaterThan(outro(""));
   });
 });
+
+describe("격투기 편집 계획", () => {
+  const hs = Array.from({ length: 5 }, (_, i) => ({ sourceId: "a", start: i * 20, length: 4, score: 1 - i * 0.1 }));
+  it("minCutBeats: 한 박자 컷 없이 모두 2박 이상", () => {
+    const plan = buildPlan({ highlights: hs, style: parseStyle("빠르게 강렬한"), totalSeconds: 20, minCutBeats: 2 });
+    const beat = 60 / plan.bpm;
+    for (const s of plan.segments.slice(1)) expect(s.duration).toBeGreaterThanOrEqual(2 * beat - 1e-6);
+  });
+
+  it("quietCuts: 번쩍임은 구간이 바뀔 때만", () => {
+    const style = parseStyle("빠르게 강렬한");
+    if (!style.effects.has("flash")) style.effects.add("flash");
+    const loud = buildPlan({ highlights: hs, style, totalSeconds: 20 });
+    const quiet = buildPlan({ highlights: hs, style, totalSeconds: 20, quietCuts: true });
+    expect(quiet.segments.filter(s => s.flash).length).toBeLessThan(loud.segments.filter(s => s.flash).length);
+    expect(quiet.segments.filter(s => s.flash).length).toBeLessThanOrEqual(2);
+  });
+
+  it("장면을 다시 쓸 때 같은 순서 묶음이 통째로 반복되지 않음", () => {
+    const pool = interleaveBySource(hs, 15);
+    const order = pool.map(h => h.start);
+    const blocks = [order.slice(0, 5).join(), order.slice(5, 10).join(), order.slice(10, 15).join()];
+    expect(new Set(blocks).size).toBe(3);
+    for (let i = 1; i < order.length; i++) expect(order[i]).not.toBe(order[i - 1]);
+  });
+});
