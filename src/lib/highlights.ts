@@ -24,6 +24,11 @@ export interface FrameSample {
   detail?: number;
   /** 카메라 이동을 뺀 실제 동작의 크기 (motion은 카메라가 움직여도 커짐) */
   action?: number;
+  /**
+   * 화면 아래쪽 절반(맨 아래 자막 띠 제외)에서 밝고 색이 옅은 부분의 비율 0~1 — 격투기 경기장 바닥(매트)이 보이는 정도.
+   * 경기 중 전경은 크게, 입장·얼굴 클로즈업·복도 장면은 작게 나옵니다.
+   */
+  floor?: number;
   /** 바로 앞 샘플과 이어지지 않음(긴 영상에서 따로 촘촘히 본 구간의 첫 샘플) — 구간을 넘어 비교하거나 이어 붙이지 않음 */
   gap?: boolean;
 }
@@ -135,6 +140,25 @@ const LOCAL_FLOOR = 0.005;
 const MIN_RISE = 0.004;
 /** 직전보다 몇 배까지 커진 것을 구분할지 */
 const MAX_RATIO = 4;
+/** 경기장 바닥이 이 비율 이상 보이면 경기 장면으로 봅니다 */
+const ARENA_FLOOR = 0.33;
+/** 바닥 비율이 이보다 작으면 경기 밖 장면, ARENA_FLOOR까지 서서히 */
+const ARENA_LOW = 0.22;
+
+/**
+ * 샘플마다 경기 장면일 정도 0~1. 영상에 경기장 바닥이 보이는 장면이 충분히 있을 때만(10% 이상) 쓰고,
+ * 아니면(파란 매트·바닥이 안 보이는 중계) null — 그런 영상은 예전처럼 고릅니다.
+ */
+export function arenaLevels(samples: FrameSample[]): number[] | null {
+  const known = samples.filter(s => s.floor !== undefined && !s.cut);
+  if (known.length < 4 || known.filter(s => s.floor! >= ARENA_FLOOR && s.brightness < 0.85).length < known.length * 0.1) return null;
+  return samples.map(s => {
+    // 화면 전체가 하얗게 날아간 장면(번쩍임)은 바닥이 아닙니다.
+    if (s.floor === undefined || s.brightness >= 0.85) return 0;
+    return Math.max(0, Math.min(1, (s.floor - ARENA_LOW) / (ARENA_FLOOR - ARENA_LOW)));
+  });
+}
+
 /** 함성이 결정타보다 이만큼(초) 늦게 터진다고 보고 다시 볼 곳을 앞당깁니다 */
 const ROAR_LEAD = 1;
 /** 따로 본 구간의 마지막 샘플 뒤로 이만큼까지는 본 것으로 칩니다(샘플 간격 정도) */
@@ -176,12 +200,14 @@ export function pickRegions(
   const action = byRange(coarse.map(s => (s.cut ? 0 : (s.action ?? s.motion))));
   const loud = byRange(audioPeak ? audioPeak.map(p => p.value) : coarse.map(s => s.audio));
   const presence = byRange(coarse.map(s => s.presence ?? 0));
+  const arena = wide ? arenaLevels(coarse) : null;
   const margin = Math.min(duration * 0.03, 3);
   const ranked = coarse
     .map((s, i) => {
       // 듬성듬성 본 한 지점의 움직임은 우연에 가깝고, 소리는 구간 전체를 훑은 것이라 소리를 비슷하게 칩니다.
       let score = 0.4 * action[i] + 0.45 * loud[i] + (wide ? 0.15 * (1 - presence[i]) : 0.15 * presence[i]);
       if (wide) score *= 1 - 0.5 * presence[i];
+      if (arena) score *= 0.1 + 0.9 * arena[i];
       // 검은 화면·멈춘 화면·빈 화면은 고르지 않습니다.
       if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
       // 한 지점만 보고 멈춘 화면이라 하기는 이르니, 소리가 크게 튄 곳이면 깎지 않습니다.
@@ -280,6 +306,8 @@ export function scoreSamples(
   if (scene?.people) presenceWeight += 0.6;
   if (options.wide) presenceWeight = 0;
   const closeUp = options.wide ? normalize(samples.map(s => s.presence ?? 0)) : null;
+  // 격투기: 경기장 바닥이 보이는 경기 장면을 크게 우선합니다(입장·소개·클로즈업은 크게 낮춤).
+  const arena = options.wide ? arenaLevels(samples) : null;
   const brightnessWeight = scene?.brightness ? 0.4 : 0;
   const light = brightnessWeight ? normalize(samples.map(s => s.brightness)) : null;
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
@@ -300,6 +328,7 @@ export function scoreSamples(
     // 단색·뿌연 화면 (세부를 재지 않은 예전 분석 결과는 건너뜀)
     if (s.detail !== undefined && s.detail < FLAT_DETAIL) score *= 0.3;
     if (closeUp) score *= 1 - 0.6 * closeUp[i];
+    if (arena) score *= 0.15 + 0.85 * arena[i];
     return score;
   });
 }
@@ -319,7 +348,7 @@ export function pickHighlights(
    * preferImpact: 결정적 순간이 중요한 영상 — 그런 순간이 있는 영상이면, 없는 구간(걷기·세리머니·견제)은 크게 낮춤
    * sport: 종목별 핵심 순간 기준(격투기 연타, 구기 드리블·슛 뒤 함성, 레이싱 속도감)
    */
-  options: { preferImpact?: boolean; sport?: SportKind | null } = {}
+  options: { preferImpact?: boolean; sport?: SportKind | null; wide?: boolean } = {}
 ): Highlight[] {
   if (!samples.length || duration < length) return [];
   const margin = Math.min(duration * 0.03, 3);
@@ -333,6 +362,8 @@ export function pickHighlights(
   const fastLine = pace ? [...pace].sort((a, b) => a - b)[Math.floor(pace.length * 0.7)] ?? 0 : 0;
   const windows: Highlight[] = [];
   const refined = samples.some(sample => sample.gap);
+  // 격투기: 경기장 바닥이 보이는 경기 장면이 아니면(입장·소개·클로즈업) 결정적 순간이 있어도 크게 낮춥니다.
+  const arena = options.wide ? arenaLevels(samples) : null;
   for (let i = 0; i < samples.length; i++) {
     const start = samples[i].t;
     const end = start + length;
@@ -385,7 +416,13 @@ export function pickHighlights(
       // 종목에 따라 장면 자체(움직임·색·소리)보다 결정적 순간의 세기를 더 봅니다.
       const weight = profile?.impactWeight ?? 0;
       const base = (1 - weight) * (sum / n) + weight * (peakIndex >= 0 ? impact[peakIndex] : 0);
-      const window: Highlight = { sourceId, start, length, score: Math.max(0, (base - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen) };
+      let inArena = 1;
+      if (arena) {
+        let sumArena = 0;
+        for (let j = i; j < i + n; j++) sumArena += arena[j];
+        inArena = 0.15 + 0.85 * (sumArena / n);
+      }
+      const window: Highlight = { sourceId, start, length, score: Math.max(0, (base - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen * inArena) };
       if (peakIndex >= 0) {
         window.peak = samples[peakIndex].t;
         if (profile?.accent) window.accent = true;
