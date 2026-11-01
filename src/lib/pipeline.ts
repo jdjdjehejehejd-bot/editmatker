@@ -5,6 +5,7 @@ import { isMobile, LIMITS } from "./device";
 import { isChunkLoadError, OUTDATED_MESSAGE } from "./version";
 import { checkUserInput, classifierError, MODEL_FAILED, GenerationBlockedError, type ModerationOptions, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { assessVideo, pickHighlights, scoreSamples, type Highlight } from "./highlights";
+import { detectSport, type SportKind } from "./sport";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
@@ -508,6 +509,12 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
   /** 이 영상을 스포츠 기준(맨살·몸싸움 오탐 완화)으로 볼지: 주제·특징 문장·영상 제목과 태그 중 하나라도 경기 관련이면 */
   const featureSports = mentionsSports(input.features);
   const isSportsJob = (job: Job) => Boolean(job.topic.info.sports || featureSports || mentionsSports([job.candidate.title, job.candidate.tags].filter(Boolean).join(" ")));
+  /** 종목(격투기·구기·레이싱): 주제 설명·이름·관련 주제·특징 문장·영상 제목으로 알아보고, 스포츠인데 모르면 일반 스포츠 */
+  const sportOf = (job: Job): SportKind | null => {
+    const info = job.topic.info;
+    const kind = detectSport(info.query, info.label, info.englishLabel, info.description, (info.related ?? []).join(" "), input.features, job.candidate.title, job.candidate.tags);
+    return kind ?? (isSportsJob(job) ? "general" : null);
+  };
 
   /** 영상 하나를 받아 분석하고 장면을 검사합니다. 공유 상태는 건드리지 않습니다(판정은 꺼낼 때). */
   const prepare = async (job: Job): Promise<Prepared> => {
@@ -602,14 +609,16 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         }
         // 인물 주제는 그 사람이 크게 보이는 순간을 더 높게 칩니다.
         // 특징 문장이 말하는 장면(밝기·동작 세기·함성·얼굴·화려함)과 찍힌 대상, 상대편과 닮은 정도를 함께 반영합니다.
-        let scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0, style.scene);
+        // 종목에 맞는 핵심 순간: 격투기는 공격·연타, 구기는 드리블·슛 뒤 함성, 레이싱은 속도감(카메라 이동까지 움직임으로)
+        const sport = sportOf(job);
+        let scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0, style.scene, { cameraMotion: sport === "racing" });
         if (sims && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, sims);
         if (subjects && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, subjects, 0.35);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
         // 가중치가 큰 올린 영상은 더 자주 나오므로 하이라이트도 그만큼 더 뽑아 같은 장면 반복을 줄입니다.
         const count = candidate.uploadWeight ? Math.ceil(perSource * candidate.uploadWeight) : perSource;
         // 스포츠 영상은 펀치·슛 같은 결정적 순간이 있는 구간을 우선합니다(걷기·세리머니·견제만 하는 장면은 뒤로).
-        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact) });
+        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact), sport });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
         // 의미 없는 장면만 나열되지 않게: 거의 내내 멈춘 영상(사진 모음·슬라이드쇼·배경화면 영상)은
         // 다른 후보가 남아 있으면 건너뜁니다(직접 올린 영상은 그대로 씀). 쓰더라도 덜 살아 있는 영상은 덜 나오게 합니다.
