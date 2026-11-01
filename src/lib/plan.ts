@@ -23,6 +23,8 @@ export interface Segment {
   transition: "cut" | "fade" | "whip" | "punch";
   /** 벨로시티: 컷 안에서 빨라졌다 느려졌다 하는 속도 램프 */
   velocity: boolean;
+  /** 컷 안에서 결정적 순간(공격·슛)이 오는 때(컷 시작부터 초) — 그 순간에 살짝 줌·번쩍 강조 */
+  hitAt?: number;
 }
 
 export interface EditPlan {
@@ -114,6 +116,13 @@ export function pickTransition(style: EditStyle, section: Section, dropIndex: nu
   return dropIndex % 3 === 2 ? "whip" : "cut";
 }
 
+/** 결정적 순간이 이 컷 안에서 언제 오는지 (강조할 순간이 없거나 컷 밖이면 없음) */
+function hitTime(h: Highlight, srcStart: number, rate: number, duration: number): number | undefined {
+  if (!h.accent || h.peak === undefined) return undefined;
+  const at = (h.peak - srcStart) / rate;
+  return at > 0.05 && at < duration - 0.05 ? at : undefined;
+}
+
 export function buildPlan(input: PlanInput): EditPlan {
   const { style } = input;
   const bpm = input.bpm ?? style.bpm;
@@ -188,6 +197,7 @@ export function buildPlan(input: PlanInput): EditPlan {
       shake: style.effects.has("shake") && inDrop,
       transition: i === 0 ? "cut" : pickTransition(style, section, inDrop ? dropIndex : -1),
       velocity: style.effects.has("velocity") && inDrop && beats >= 2 && rate === 1,
+      hitAt: hitTime(h, srcStart, rate, duration),
     });
     if (inDrop) dropIndex++;
     cursor += duration;

@@ -28,6 +28,9 @@ const POOL_SIZE = 5;
 const LOOKAHEAD = POOL_SIZE - 2;
 const FADE_SECONDS = 0.35;
 const PUNCH_SECONDS = 0.18;
+/** 결정적 순간의 강조: 줌 세기, 번쩍 길이 */
+const HIT_ZOOM = 0.07;
+const HIT_FLASH_SECONDS = 0.08;
 const WHIP_SECONDS = 0.14;
 
 /** 부드러운 시작·끝 (줌이 기계적으로 보이지 않게) */
@@ -256,6 +259,11 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
     let zoom = seg.zoom === "in" ? 1 + 0.12 * eased : seg.zoom === "out" ? 1.12 - 0.12 * eased : 1.02;
     // 줌 펀치: 컷 순간 살짝 확대됐다가 빠르게 제자리로
     if (seg.transition === "punch" && local < PUNCH_SECONDS) zoom *= 1 + 0.14 * (1 - local / PUNCH_SECONDS) ** 2;
+    // 결정적 순간(공격이 들어감·슛): 그 찰나에 살짝 당겼다 풀어 타격감을 줍니다.
+    if (seg.hitAt !== undefined) {
+      const d = local - seg.hitAt;
+      if (d > -0.2 && d < 0.3) zoom *= 1 + HIT_ZOOM * Math.exp(-((d / 0.08) ** 2));
+    }
     // 벨로시티: 빠르게 → 느리게 → 빠르게 (재생 속도를 프레임마다 조절)
     if (seg.velocity && alpha === 1) {
       const target = Math.min(2, Math.max(0.4, seg.rate * (1.55 - 1.1 * Math.sin(Math.PI * p))));
@@ -377,6 +385,14 @@ export async function renderEdit(options: RenderOptions): Promise<{ blob: Blob; 
       ctx.fillStyle = "#000";
       ctx.fillRect(0, 0, W, bar);
       ctx.fillRect(0, H - bar, W, bar);
+    }
+    // 결정적 순간에 아주 짧게 번쩍
+    if (seg?.hitAt !== undefined) {
+      const d = now - seg.start - seg.hitAt;
+      if (d >= 0 && d < HIT_FLASH_SECONDS) {
+        ctx.fillStyle = `rgba(255,255,255,${(0.3 * (1 - d / HIT_FLASH_SECONDS)).toFixed(3)})`;
+        ctx.fillRect(0, 0, W, H);
+      }
     }
     if (seg?.flash) {
       const local = now - seg.start;

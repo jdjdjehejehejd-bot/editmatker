@@ -1,6 +1,7 @@
 // 프레임 분석 결과에서 "볼 만한 순간"을 골라냅니다. 브라우저 API에 의존하지 않는 순수 함수입니다.
 
 import type { EditStyle, ScenePreference } from "./style";
+import { SPORT_PROFILES, type SportKind } from "./sport";
 
 export interface FrameSample {
   t: number;
@@ -66,6 +67,8 @@ export interface Highlight {
   weight?: number;
   /** 구간에서 가장 강한 순간(펀치·슛·착지처럼 움직임과 소리가 확 튀는 때)의 원본 시각 — 편집에서 이 순간이 잘리지 않게 씀 */
   peak?: number;
+  /** 편집에서 이 순간(peak)에 살짝 줌·번쩍 강조를 넣을지 (격투기 공격, 슛 같은 스포츠의 결정적 순간) */
+  accent?: boolean;
 }
 
 /**
@@ -130,7 +133,7 @@ export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boole
  * 샘플마다 0~1 점수를 매깁니다.
  * @param presenceWeight 사람이 화면에 크게 나올수록 더할 가중치 (인물 주제에서 그 사람이 보이는 순간을 고르려고, 기본 0)
  */
-export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["weights"], basePresence = 0, scene?: ScenePreference): number[] {
+export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["weights"], basePresence = 0, scene?: ScenePreference, options: { cameraMotion?: boolean } = {}): number[] {
   if (!samples.length) return [];
   // 특징 문장이 말하는 장면(격렬한, 잔잔한, 함성, 얼굴, 화려한)일수록 높게 칩니다.
   const weights = { ...baseWeights };
@@ -149,7 +152,8 @@ export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["wei
   const light = brightnessWeight ? normalize(samples.map(s => s.brightness)) : null;
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
   // 카메라 이동을 뺀 실제 동작(action)을 재 두었으면 그걸 씁니다 — 카메라만 따라가는 걷기·견제 장면이 높게 나오지 않게.
-  const motion = normalize(samples.map(s => (s.cut ? 0 : (s.action ?? s.motion))));
+  // 레이싱처럼 속도감이 핵심인 영상은 카메라 이동까지 움직임으로 칩니다.
+  const motion = normalize(samples.map(s => (s.cut ? 0 : options.cameraMotion ? s.motion : (s.action ?? s.motion))));
   const audio = normalize(samples.map(s => s.audio));
   const color = normalize(samples.map(s => s.color));
   const presence = presenceWeight ? normalize(samples.map(s => s.presence ?? 0)) : null;
@@ -178,12 +182,22 @@ export function pickHighlights(
   length: number,
   count: number,
   duration: number,
-  /** 스포츠처럼 결정적 순간이 중요한 영상: 그런 순간이 있는 영상이면, 없는 구간(걷기·세리머니·견제)은 크게 낮춥니다 */
-  options: { preferImpact?: boolean } = {}
+  /**
+   * preferImpact: 결정적 순간이 중요한 영상 — 그런 순간이 있는 영상이면, 없는 구간(걷기·세리머니·견제)은 크게 낮춤
+   * sport: 종목별 핵심 순간 기준(격투기 연타, 구기 드리블·슛 뒤 함성, 레이싱 속도감)
+   */
+  options: { preferImpact?: boolean; sport?: SportKind | null } = {}
 ): Highlight[] {
   if (!samples.length || duration < length) return [];
   const margin = Math.min(duration * 0.03, 3);
   const impact = impactSamples(samples);
+  const profile = options.sport ? SPORT_PROFILES[options.sport] : null;
+  const impactMin = profile?.impactMin ?? IMPACT_MIN;
+  const peakPosition = profile?.peakPosition ?? PEAK_POSITION;
+  // 구기: 슛 뒤 함성(소리가 뒤로 갈수록 커짐), 드리블·질주(빠른 동작이 계속되는 비율)를 재려고 미리 맞춥니다.
+  const loud = profile?.climaxBonus ? normalize(samples.map(s => s.audio)) : null;
+  const pace = profile?.driveBonus ? samples.map(s => (profile.useCameraMotion ? s.motion : (s.action ?? s.motion))) : null;
+  const fastLine = pace ? [...pace].sort((a, b) => a - b)[Math.floor(pace.length * 0.7)] ?? 0 : 0;
   const windows: Highlight[] = [];
   for (let i = 0; i < samples.length; i++) {
     const start = samples[i].t;
@@ -194,10 +208,15 @@ export function pickHighlights(
     let cutPenalty = 0;
     let still = 0;
     let peakIndex = -1;
+    let hits = 0;
+    let fast = 0;
     for (let j = i; j < samples.length && samples[j].t < end; j++) {
       sum += scores[j];
       n++;
-      if (impact[j] >= IMPACT_MIN && (peakIndex < 0 || impact[j] > impact[peakIndex])) peakIndex = j;
+      if (impact[j] >= impactMin && (peakIndex < 0 || impact[j] > impact[peakIndex])) peakIndex = j;
+      // 연타: 임팩트가 새로 시작되는 샘플 수
+      if (impact[j] >= impactMin && (j === i || impact[j - 1] < impactMin)) hits++;
+      if (pace && pace[j] >= fastLine && fastLine > 0) fast++;
       if (j > i && samples[j].cut) cutPenalty += 0.35;
       if (j > i && !samples[j].cut && samples[j].motion < STATIC_MOTION) still++;
     }
@@ -207,9 +226,25 @@ export function pickHighlights(
     const frozen = n > 2 && still / (n - 1) > 0.8 ? 0.35 : 1;
     // 확 튀는 순간이 있는 구간을 조금 더 높게 칩니다(펀치·슛·덩크 같은 결정적 장면).
     const impactBonus = peakIndex >= 0 ? 0.15 * impact[peakIndex] : 0;
+    // 종목별: 격투기 연타, 구기 슛 뒤 함성·드리블, 레이싱 속도감
+    let sportBonus = 0;
+    if (profile && n > 2) {
+      sportBonus += profile.comboBonus * Math.min(3, Math.max(0, hits - 1));
+      if (loud) {
+        const third = Math.max(1, Math.floor(n / 3));
+        const head = loud.slice(i, i + third);
+        const tail = loud.slice(i + n - third, i + n);
+        const mean = (list: number[]) => list.reduce((a, b) => a + b, 0) / Math.max(1, list.length);
+        sportBonus += profile.climaxBonus * Math.max(0, Math.min(1, mean(tail) - mean(head)));
+      }
+      if (pace) sportBonus += profile.driveBonus * (fast / n);
+    }
     if (n) {
-      const window: Highlight = { sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart + impactBonus) * frozen) };
-      if (peakIndex >= 0) window.peak = samples[peakIndex].t;
+      const window: Highlight = { sourceId, start, length, score: Math.max(0, (sum / n - cutPenalty + cleanStart + impactBonus + sportBonus) * frozen) };
+      if (peakIndex >= 0) {
+        window.peak = samples[peakIndex].t;
+        if (profile?.accent) window.accent = true;
+      }
       windows.push(window);
     }
   }
@@ -231,15 +266,19 @@ export function pickHighlights(
   for (const w of windows) {
     if (w.peak === undefined) continue;
     const peak = w.peak;
-    let start = Math.min(Math.max(margin, peak - PEAK_POSITION * length), duration - margin - length);
+    let start = Math.min(Math.max(margin, peak - peakPosition * length), duration - margin - length);
     const lastCut = cutTimes.filter(t => t > start && t <= peak).pop();
     if (lastCut !== undefined) start = lastCut;
     if (average(start) >= average(w.start) * 0.9) w.start = start;
     // 옮기지 못했어도 임팩트가 구간 밖으로 밀려났으면 편집에서 쓰지 않게 지웁니다.
-    if (w.peak < w.start || w.peak >= w.start + length) delete w.peak;
+    if (w.peak < w.start || w.peak >= w.start + length) {
+      delete w.peak;
+      delete w.accent;
+    }
   }
-  if (options.preferImpact && windows.some(w => w.peak !== undefined)) {
-    for (const w of windows) if (w.peak === undefined) w.score *= NO_IMPACT_FACTOR;
+  if ((options.preferImpact || profile) && windows.some(w => w.peak !== undefined)) {
+    const factor = profile?.noImpactFactor ?? NO_IMPACT_FACTOR;
+    for (const w of windows) if (w.peak === undefined) w.score *= factor;
   }
   windows.sort((a, b) => b.score - a.score);
   // 의미 없는 구간을 채워 넣지 않도록, 가장 좋은 구간보다 많이 떨어지는 구간은 고르지 않습니다.
