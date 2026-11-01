@@ -158,7 +158,9 @@ export function pickRegions(
   duration: number,
   regionSeconds: number,
   count: number,
-  audioPeak?: { value: number; at: number }[]
+  audioPeak?: { value: number; at: number }[],
+  /** 사람이 작게 보이는 넓은 장면을 우선(격투기) */
+  wide = false
 ): { from: number; to: number }[] {
   if (!coarse.length || count <= 0) return [];
   // 드물게 튀는 곳을 찾는 것이라 백분위(normalize)가 아니라 최솟값~최댓값으로 맞춥니다.
@@ -174,7 +176,8 @@ export function pickRegions(
   const ranked = coarse
     .map((s, i) => {
       // 듬성듬성 본 한 지점의 움직임은 우연에 가깝고, 소리는 구간 전체를 훑은 것이라 소리를 비슷하게 칩니다.
-      let score = 0.4 * action[i] + 0.45 * loud[i] + 0.15 * presence[i];
+      let score = 0.4 * action[i] + 0.45 * loud[i] + (wide ? 0.15 * (1 - presence[i]) : 0.15 * presence[i]);
+      if (wide) score *= 1 - 0.5 * presence[i];
       // 검은 화면·멈춘 화면·빈 화면은 고르지 않습니다.
       if (s.brightness < 0.08 || s.brightness > 0.95) score *= 0.15;
       // 한 지점만 보고 멈춘 화면이라 하기는 이르니, 소리가 크게 튄 곳이면 깎지 않습니다.
@@ -249,7 +252,14 @@ export function detectCuts(motion: number[], threshold = 0.22, ratio = 3): boole
  * 샘플마다 0~1 점수를 매깁니다.
  * @param presenceWeight 사람이 화면에 크게 나올수록 더할 가중치 (인물 주제에서 그 사람이 보이는 순간을 고르려고, 기본 0)
  */
-export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["weights"], basePresence = 0, scene?: ScenePreference, options: { cameraMotion?: boolean } = {}): number[] {
+export function scoreSamples(
+  samples: FrameSample[],
+  baseWeights: EditStyle["weights"],
+  basePresence = 0,
+  scene?: ScenePreference,
+  /** wide: 사람이 화면을 채우는 클로즈업을 낮춤(격투기 — 경기 전 얼굴·입장 장면 대신 경기장 전경) */
+  options: { cameraMotion?: boolean; wide?: boolean } = {}
+): number[] {
   if (!samples.length) return [];
   // 특징 문장이 말하는 장면(격렬한, 잔잔한, 함성, 얼굴, 화려한)일수록 높게 칩니다.
   const weights = { ...baseWeights };
@@ -264,6 +274,8 @@ export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["wei
   if (scene?.loud) weights.audio *= 1.8;
   if (scene?.colorful) weights.color *= 1.6;
   if (scene?.people) presenceWeight += 0.6;
+  if (options.wide) presenceWeight = 0;
+  const closeUp = options.wide ? normalize(samples.map(s => s.presence ?? 0)) : null;
   const brightnessWeight = scene?.brightness ? 0.4 : 0;
   const light = brightnessWeight ? normalize(samples.map(s => s.brightness)) : null;
   // 장면 전환 자체의 픽셀 차이는 움직임으로 치지 않습니다.
@@ -283,6 +295,7 @@ export function scoreSamples(samples: FrameSample[], baseWeights: EditStyle["wei
     if (s.color < 0.02) score *= 0.5;
     // 단색·뿌연 화면 (세부를 재지 않은 예전 분석 결과는 건너뜀)
     if (s.detail !== undefined && s.detail < FLAT_DETAIL) score *= 0.3;
+    if (closeUp) score *= 1 - 0.6 * closeUp[i];
     return score;
   });
 }

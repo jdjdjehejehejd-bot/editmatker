@@ -5,7 +5,7 @@ import { isMobile, LIMITS } from "./device";
 import { isChunkLoadError, OUTDATED_MESSAGE } from "./version";
 import { checkUserInput, classifierError, MODEL_FAILED, GenerationBlockedError, type ModerationOptions, isNsfwRequested, isTextAllowedWith, isTopicAllowed, preloadClassifier, screenFrames, shouldBlockTopic } from "./moderation";
 import { assessVideo, pickHighlights, scoreSamples, type Highlight } from "./highlights";
-import { detectSport, type SportKind } from "./sport";
+import { detectSport, SPORT_PROFILES, type SportKind } from "./sport";
 import { prepareUserMusic, synthesizeMusic } from "./music";
 import { buildPlan, requiredHighlightLength, type EditPlan } from "./plan";
 import { tailSeconds } from "./render";
@@ -528,7 +528,9 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
     const url = URL.createObjectURL(blob);
     try {
       report("analyze", `${candidate.title} 장면 분석 중`, 0);
-      const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples * (slots <= 2 ? 2 : 1), undefined, true);
+      const analysis = await analyzeVideo(blob, url, ratio => report("analyze", `${candidate.title} 장면 분석 중`, ratio), controller.signal, LIMITS.analysisSamples * (slots <= 2 ? 2 : 1), undefined, {
+        wide: SPORT_PROFILES[sportOf(job) ?? "general"].wideShots && !style.scene?.people,
+      });
       // 검열: 실제 장면을 검사해 선정적인 영상은 쓰지 않습니다(NSFW 모드에서는 검사하지 않음).
       if (!policy.nsfw) report("analyze", `${candidate.title} 장면 검열 중`);
       // 스포츠 선수 주제는 경기 중 노출(상의 탈의 등)을 선정성으로 보지 않습니다.
@@ -611,7 +613,10 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         // 특징 문장이 말하는 장면(밝기·동작 세기·함성·얼굴·화려함)과 찍힌 대상, 상대편과 닮은 정도를 함께 반영합니다.
         // 종목에 맞는 핵심 순간: 격투기는 공격·연타, 구기는 드리블·슛 뒤 함성, 레이싱은 속도감(카메라 이동까지 움직임으로)
         const sport = sportOf(job);
-        let scores = scoreSamples(analysis.samples, style.weights, topic.info.person ? 0.6 : 0, style.scene, { cameraMotion: sport === "racing" });
+        // 격투기: 사람이 화면을 채우는 클로즈업(경기 전 얼굴·입장·소개)보다 경기장 전경을 우선합니다.
+        // 특징에 얼굴·표정 장면을 적었으면 그대로 따릅니다.
+        const wide = sport ? SPORT_PROFILES[sport].wideShots && !style.scene?.people : false;
+        let scores = scoreSamples(analysis.samples, style.weights, topic.info.person && !wide ? 0.6 : 0, style.scene, { cameraMotion: sport === "racing", wide });
         if (sims && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, sims);
         if (subjects && analysis.keyframeTimes) scores = addSimilarity(scores, analysis.samples, analysis.keyframeTimes, subjects, 0.35);
         const length = Math.min(highlightLength, analysis.duration * 0.5);
