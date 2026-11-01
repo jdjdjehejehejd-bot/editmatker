@@ -623,7 +623,7 @@ export async function runPipeline(input: PipelineInput, events: PipelineEvents, 
         // 가중치가 큰 올린 영상은 더 자주 나오므로 하이라이트도 그만큼 더 뽑아 같은 장면 반복을 줄입니다.
         const count = candidate.uploadWeight ? Math.ceil(perSource * candidate.uploadWeight) : perSource;
         // 스포츠 영상은 펀치·슛 같은 결정적 순간이 있는 구간을 우선합니다(걷기·세리머니·견제만 하는 장면은 뒤로).
-        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact), sport });
+        const highlights = pickHighlights(candidate.id, analysis.samples, scores, length, count, analysis.duration, { preferImpact: isSportsJob(job) || Boolean(style.scene?.impact), sport, wide });
         if (!highlights.length) throw new Error("쓸 만한 장면이 없었어요.");
         // 의미 없는 장면만 나열되지 않게: 거의 내내 멈춘 영상(사진 모음·슬라이드쇼·배경화면 영상)은
         // 다른 후보가 남아 있으면 건너뜁니다(직접 올린 영상은 그대로 씀). 쓰더라도 덜 살아 있는 영상은 덜 나오게 합니다.

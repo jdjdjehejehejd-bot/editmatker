@@ -250,3 +250,29 @@ describe("격투기: 경기장 전경 우선", () => {
     expect(wide[4]).toBeLessThan(wide[30]);
   });
 });
+
+describe("격투기: 경기장 바닥이 보이는 경기 장면", () => {
+  const sample = (t: number, floor: number, extra: Partial<FrameSample> = {}): FrameSample => ({ t, motion: 0.02, action: 0.02, audio: 0.2, color: 0.4, brightness: 0.5, cut: false, detail: 0.05, floor, ...extra });
+  it("arenaLevels: 바닥이 보이는 장면이 충분할 때만 쓰고, 하얗게 날아간 장면은 바닥으로 안 봄", async () => {
+    const { arenaLevels } = await import("./highlights");
+    expect(arenaLevels(Array.from({ length: 20 }, (_, i) => sample(i, 0.1)))).toBeNull();
+    const levels = arenaLevels([...Array.from({ length: 10 }, (_, i) => sample(i, 0.1)), ...Array.from({ length: 10 }, (_, i) => sample(10 + i, 0.5)), sample(20, 1, { brightness: 0.97 })])!;
+    expect(levels[0]).toBe(0);
+    expect(levels[15]).toBe(1);
+    expect(levels[20]).toBe(0);
+  });
+
+  it("pickHighlights wide: 임팩트가 더 커도 경기장 밖(입장 장면)보다 경기 장면", async () => {
+    const { pickHighlights, scoreSamples } = await import("./highlights");
+    const samples = Array.from({ length: 300 }, (_, i) => {
+      const t = i * 0.2;
+      const fight = t >= 30;
+      const hit = Math.abs(t - 10) < 0.05 ? 0.3 : Math.abs(t - 45) < 0.05 ? 0.12 : 0;
+      return sample(t, fight ? 0.5 : 0.1, hit ? { motion: hit, action: hit, audio: 0.6 } : {});
+    });
+    const scores = scoreSamples(samples, weights, 0, undefined, { wide: true });
+    const [best] = pickHighlights("a", samples, scores, 2, 3, 60, { sport: "combat", wide: true });
+    expect(best.start).toBeGreaterThanOrEqual(30);
+    expect(best.peak).toBeCloseTo(45, 5);
+  });
+});

@@ -243,6 +243,10 @@ export async function analyzeVideo(
     let sumL2 = 0;
     let sumS = 0;
     let edge = 0;
+    let floorBright = 0;
+    let floorTotal = 0;
+    const floorTop = Math.floor(H / 2);
+    const floorBottom = Math.floor(H * 0.88);
     rowSum.fill(0);
     colSum.fill(0);
     for (let p = 0, j = 0; p < pixels.length; p += 4, j++) {
@@ -259,7 +263,13 @@ export async function analyzeVideo(
       sumL += l;
       sumL2 += l * l;
       const max = Math.max(r, g, b);
-      sumS += max ? (max - Math.min(r, g, b)) / max : 0;
+      const sat = max ? (max - Math.min(r, g, b)) / max : 0;
+      sumS += sat;
+      // 경기장 바닥(밝고 색이 옅은 매트) — 아래쪽 절반, 맨 아래 자막·점수 띠는 뺌
+      if (y >= floorTop && y < floorBottom) {
+        floorTotal++;
+        if (l > 0.55 && sat < 0.3) floorBright++;
+      }
     }
     const n = W * H;
     for (let y = 0; y < H; y++) rowPeak[y] = Math.max(rowPeak[y], rowSum[y] / W);
@@ -277,7 +287,7 @@ export async function analyzeVideo(
     const action = previous ? residualMotion(luma, previous, W, H) : 0;
     previous = luma;
     onProgress(Math.min(1, ++seeks / totalSeeks));
-    return { t: time, motion, action, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, focusX: focus.x, focusY: focus.y, presence: focus.presence };
+    return { t: time, motion, action, color: Math.min(1, (sumS / n) * contrast * 4), brightness: mean, detail: edge / n, floor: floorTotal ? floorBright / floorTotal : 0, focusX: focus.x, focusY: focus.y, presence: focus.presence };
   };
 
   const raw: Omit<FrameSample, "cut" | "audio">[] = [];
